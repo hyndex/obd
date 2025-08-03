@@ -57,6 +57,11 @@ The utilities and tests rely on a few Python packages:
 
 Install them with `pip install -r requirements.txt`.
 
+## Usage Guide
+
+For step-by-step setup, configuration, and troubleshooting instructions, see
+the [getting started guide](docs/GETTING_STARTED.md).
+
 ## BLF Log Decoding
 
 A small helper script, `blf_decoder.py`, can decode Vector BLF log files
