@@ -12,13 +12,13 @@ import argparse
 import json
 import logging
 import os
-import subprocess
 import time
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from serialization import serialize_frame
 from transport import Transport
+from canbus import setup_interface
 
 try:
     import can
@@ -31,52 +31,6 @@ try:
 except ImportError:  # pragma: no cover
     cantools = None  # type: ignore
     Database = None  # type: ignore
-
-
-def setup_interface(interface: str, bitrate: int, listen_only: bool) -> None:
-    """Configure the SocketCAN interface using ``modprobe`` and ``ip link``.
-
-    Parameters
-    ----------
-    interface:
-        Name of the interface (e.g. ``"can0"``).
-    bitrate:
-        Bus bitrate in bits per second.
-    listen_only:
-        If ``True``, the interface is placed in listen-only mode.
-
-    Notes
-    -----
-    ``subprocess`` is used so that the module can auto-recover by rerunning
-    setup commands.  Each command failure is logged but does not raise, so that
-    the caller can decide how to proceed.
-    """
-
-    commands = [
-        ["modprobe", "can"],
-        ["modprobe", "can_raw"],
-        ["ip", "link", "set", interface, "down"],
-        [
-            "ip",
-            "link",
-            "set",
-            interface,
-            "up",
-            "type",
-            "can",
-            "bitrate",
-            str(bitrate),
-        ],
-    ]
-
-    if listen_only:
-        commands[-1].extend(["listen-only", "on"])
-
-    for cmd in commands:
-        try:
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except subprocess.CalledProcessError as exc:  # pragma: no cover - system dependent
-            logging.warning("Command failed (%s): %s", " ".join(cmd), exc)
 
 
 def load_dbc(dbc_path: str) -> Optional[Database]:
@@ -155,11 +109,21 @@ def monitor(
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for command-line execution."""
 
-    parser = argparse.ArgumentParser(description="Monitor a SocketCAN bus and decode messages")
-    parser.add_argument("--bitrate", type=int, default=500000, help="CAN bitrate in bits per second")
-    parser.add_argument("--interface", default="can0", help="SocketCAN interface to use")
-    parser.add_argument("--log", dest="log_path", default="can.log", help="Path to log file")
-    parser.add_argument("--listen-only", action="store_true", help="Enable listen-only mode")
+    parser = argparse.ArgumentParser(
+        description="Monitor a SocketCAN bus and decode messages"
+    )
+    parser.add_argument(
+        "--bitrate", type=int, default=500000, help="CAN bitrate in bits per second"
+    )
+    parser.add_argument(
+        "--interface", default="can0", help="SocketCAN interface to use"
+    )
+    parser.add_argument(
+        "--log", dest="log_path", default="can.log", help="Path to log file"
+    )
+    parser.add_argument(
+        "--listen-only", action="store_true", help="Enable listen-only mode"
+    )
     parser.add_argument("--config", help="Path to JSON configuration file")
     parser.add_argument("--log-level", help="Logging level (e.g. INFO, DEBUG)")
     args = parser.parse_args(argv)
@@ -196,7 +160,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     while True:
         try:
-            with can.interface.Bus(bustype="socketcan", channel=args.interface, receive_own_messages=False) as bus:
+            with can.interface.Bus(
+                bustype="socketcan", channel=args.interface, receive_own_messages=False
+            ) as bus:
                 logger.info("Connected to %%s", args.interface)
                 monitor(bus, db, logger)
         except can.CanError as exc:  # pragma: no cover - runtime CAN errors
