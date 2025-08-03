@@ -19,6 +19,12 @@ from typing import Optional
 from serialization import serialize_frame
 from transport import Transport
 from canbus import setup_interface
+from metrics import (
+    record_bus_error,
+    record_decoding_failure,
+    record_restart,
+    reset_metrics,
+)
 
 try:
     import can
@@ -89,6 +95,7 @@ def monitor(
             try:
                 decoded = db.decode_message(msg.arbitration_id, msg.data)
             except Exception:  # pragma: no cover - depends on DBC
+                record_decoding_failure()
                 logger.debug("No DBC entry for id=0x%%03X", msg.arbitration_id)
 
         logger.info(
@@ -103,6 +110,7 @@ def monitor(
             transport.send(payload)
 
         if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
+            record_bus_error()
             raise can.CanError("Bus-off state detected")
 
 
@@ -139,6 +147,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     level_name = args.log_level or config.get("log_level", "INFO")
     level = getattr(logging, str(level_name).upper(), logging.INFO)
 
+    reset_metrics()
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s: %(message)s",
@@ -166,15 +176,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                 logger.info("Connected to %%s", args.interface)
                 monitor(bus, db, logger)
         except can.CanError as exc:  # pragma: no cover - runtime CAN errors
+            record_bus_error()
             logger.error("CAN error: %%s. Restarting interface...", exc)
             time.sleep(1)
+            record_restart()
             setup_interface(args.interface, args.bitrate, args.listen_only)
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             break
         except Exception as exc:  # pragma: no cover - unexpected
+            record_bus_error()
             logger.exception("Unexpected error: %%s", exc)
             time.sleep(1)
+            record_restart()
             setup_interface(args.interface, args.bitrate, args.listen_only)
 
     return 0
