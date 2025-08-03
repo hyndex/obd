@@ -29,14 +29,9 @@ def log_setup(tmp_path):
     logger = logging.getLogger(f"test_{uuid.uuid4().hex}")
     logger.setLevel(logging.INFO)
     handler = logging.FileHandler(log_file)
+    handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
     logger.propagate = False
-
-    def info(msg, *args, **kwargs):
-        formatted = msg.replace("%%", "%") % args
-        logger._log(logging.INFO, formatted, (), **kwargs)
-
-    logger.info = info  # type: ignore[assignment]
 
     try:
         yield logger, log_file

@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import time
+import threading
+import queue
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
@@ -59,9 +61,9 @@ def load_dbc(dbc_path: str) -> Optional[Database]:
     try:
         return cantools.database.load_file(dbc_path)
     except FileNotFoundError:
-        logging.warning("DBC file not found: %%s", dbc_path)
+        logging.warning("DBC file not found: %s", dbc_path)
     except Exception as exc:  # pragma: no cover - cantools errors
-        logging.warning("Failed to load DBC: %%s", exc)
+        logging.warning("Failed to load DBC: %s", exc)
     return None
 
 
@@ -85,33 +87,76 @@ def monitor(
         Logger used for output.
     """
 
-    while True:
-        msg = bus.recv(timeout=1.0)
-        if msg is None:
-            continue
+    send_queue: queue.Queue[str] | None = None
+    if serializer and transport:
+        send_queue = queue.Queue(maxsize=1000)
 
-        decoded = None
-        if db:
-            try:
-                decoded = db.decode_message(msg.arbitration_id, msg.data)
-            except Exception:  # pragma: no cover - depends on DBC
-                record_decoding_failure()
-                logger.debug("No DBC entry for id=0x%%03X", msg.arbitration_id)
+        def _worker() -> None:
+            while True:
+                payload = send_queue.get()
+                try:
+                    transport.send(payload)
+                except Exception:  # pragma: no cover - network errors
+                    logger.error("Transport error", exc_info=True)
+                finally:
+                    send_queue.task_done()
 
-        logger.info(
-            "id=0x%%03X raw=%%s decoded=%%s",
-            msg.arbitration_id,
-            msg.data.hex(),
-            decoded,
-        )
+        threading.Thread(target=_worker, daemon=True).start()
 
-        if serializer and transport:
-            payload = serialize_frame(msg.arbitration_id, msg.data, decoded, serializer)
-            transport.send(payload)
+    try:
+        while True:
+            msg = bus.recv(timeout=1.0)
+            if msg is None:
+                # Avoid busy-looping when no frames are available
+                if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
+                    record_bus_error()
+                    raise can.CanError("Bus-off state detected")
+                time.sleep(0.1)
+                continue
 
-        if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
-            record_bus_error()
-            raise can.CanError("Bus-off state detected")
+            decoded = None
+            if db:
+                try:
+                    decoded = db.decode_message(
+                        msg.arbitration_id,
+                        msg.data,
+                        decode_choices=True,
+                    )
+                except KeyError:
+                    record_decoding_failure()
+                    logger.debug("No DBC entry for id=0x%03X", msg.arbitration_id)
+                except Exception as exc:  # pragma: no cover - depends on DBC
+                    record_decoding_failure()
+                    logger.warning(
+                        "Decoding error for id=0x%03X: %s", msg.arbitration_id, exc
+                    )
+
+            id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
+            logger.info(
+                "id=0x%s raw=%s decoded=%s",
+                id_fmt % msg.arbitration_id,
+                msg.data.hex(),
+                decoded,
+            )
+
+            if send_queue is not None:
+                payload = serialize_frame(
+                    msg.arbitration_id,
+                    msg.data,
+                    decoded,
+                    serializer,  # type: ignore[arg-type]
+                )
+                try:
+                    send_queue.put_nowait(payload)
+                except queue.Full:
+                    logger.warning("Transport queue full; dropping frame")
+
+            if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
+                record_bus_error()
+                raise can.CanError("Bus-off state detected")
+    finally:
+        if send_queue is not None:
+            send_queue.join()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -168,17 +213,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         logger.error("python-can is required but not installed")
         return 1
 
+    delay = 1.0
     while True:
         try:
             with can.interface.Bus(
                 bustype="socketcan", channel=args.interface, receive_own_messages=False
             ) as bus:
-                logger.info("Connected to %%s", args.interface)
+                logger.info("Connected to %s", args.interface)
                 monitor(bus, db, logger)
+                delay = 1.0
         except can.CanError as exc:  # pragma: no cover - runtime CAN errors
             record_bus_error()
-            logger.error("CAN error: %%s. Restarting interface...", exc)
-            time.sleep(1)
+            logger.error("CAN error: %s. Restarting interface...", exc)
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)
             record_restart()
             setup_interface(args.interface, args.bitrate, args.listen_only)
         except KeyboardInterrupt:
@@ -186,8 +234,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             break
         except Exception as exc:  # pragma: no cover - unexpected
             record_bus_error()
-            logger.exception("Unexpected error: %%s", exc)
-            time.sleep(1)
+            logger.exception("Unexpected error: %s", exc)
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)
             record_restart()
             setup_interface(args.interface, args.bitrate, args.listen_only)
 
