@@ -23,7 +23,12 @@ class CommandRunner(Protocol):
 
 
 class SystemCommands:
-    """Run commands on the host system using :func:`subprocess.run`."""
+    """Run commands on the host system using :func:`subprocess.run`.
+
+    Each command is executed with an argument list rather than a shell
+    string.  This avoids invoking the user's shell and mirrors how the
+    :mod:`subprocess` module is typically used in the library code.
+    """
 
     def modprobe(self, module: str) -> int:
         return subprocess.run(["modprobe", module], check=False).returncode
@@ -36,7 +41,8 @@ class MockCommands:
     """Record commands instead of executing them.
 
     This implementation is useful in unit tests where side effects are
-    undesirable.  Commands are stored in the :attr:`commands` list.
+    undesirable.  For readability, each command is stored as the string
+    that would be executed on the command line.
     """
 
     def __init__(self) -> None:
