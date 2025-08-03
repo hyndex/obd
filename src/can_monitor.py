@@ -69,8 +69,12 @@ def setup_interface(interface: str, bitrate: int, listen_only: bool) -> None:
 
     for cmd in commands:
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except subprocess.CalledProcessError as exc:  # pragma: no cover - system dependent
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+        except (
+            subprocess.CalledProcessError
+        ) as exc:  # pragma: no cover - system dependent
             logging.warning("Command failed (%s): %s", " ".join(cmd), exc)
 
 
@@ -117,7 +121,12 @@ def monitor(bus: "can.BusABC", db: Optional[Database], logger: logging.Logger) -
         msg = bus.recv(timeout=1.0)
         if msg is None:
             continue
-        logger.info("RAW  id=0x%%03X dlc=%%d data=%%s", msg.arbitration_id, msg.dlc, msg.data.hex())
+        logger.info(
+            "RAW  id=0x%%03X dlc=%%d data=%%s",
+            msg.arbitration_id,
+            msg.dlc,
+            msg.data.hex(),
+        )
 
         if db:
             try:
@@ -133,11 +142,21 @@ def monitor(bus: "can.BusABC", db: Optional[Database], logger: logging.Logger) -
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for command-line execution."""
 
-    parser = argparse.ArgumentParser(description="Monitor a SocketCAN bus and decode messages")
-    parser.add_argument("--bitrate", type=int, default=500000, help="CAN bitrate in bits per second")
-    parser.add_argument("--interface", default="can0", help="SocketCAN interface to use")
-    parser.add_argument("--log", dest="log_path", default="can.log", help="Path to log file")
-    parser.add_argument("--listen-only", action="store_true", help="Enable listen-only mode")
+    parser = argparse.ArgumentParser(
+        description="Monitor a SocketCAN bus and decode messages"
+    )
+    parser.add_argument(
+        "--bitrate", type=int, default=500000, help="CAN bitrate in bits per second"
+    )
+    parser.add_argument(
+        "--interface", default="can0", help="SocketCAN interface to use"
+    )
+    parser.add_argument(
+        "--log", dest="log_path", default="can.log", help="Path to log file"
+    )
+    parser.add_argument(
+        "--listen-only", action="store_true", help="Enable listen-only mode"
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -158,7 +177,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     while True:
         try:
-            with can.interface.Bus(bustype="socketcan", channel=args.interface, receive_own_messages=False) as bus:
+            with can.interface.Bus(
+                bustype="socketcan", channel=args.interface, receive_own_messages=False
+            ) as bus:
                 logger.info("Connected to %%s", args.interface)
                 monitor(bus, db, logger)
         except can.CanError as exc:  # pragma: no cover - runtime CAN errors

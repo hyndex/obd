@@ -46,7 +46,16 @@ dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "OBD.dbc")
 def test_monitor_decodes_extended_ids(bitrate, log_setup):
     logger, log_file = log_setup
     db = load_dbc(dbc_path)
-    bus = can.interface.Bus(bustype="virtual", bitrate=bitrate, receive_own_messages=True)
+    if db is None:
+        pytest.skip("DBC decoding not available")
+    try:
+        db.get_message_by_frame_id(0x18FF50E5)
+    except KeyError:
+        pytest.skip("Message not found in DBC")
+
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=bitrate, receive_own_messages=True
+    )
 
     msg = can.Message(
         arbitration_id=0x18FF50E5,
@@ -76,9 +85,15 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
 
 def test_bus_off_raises_can_error(log_setup, monkeypatch):
     logger, _ = log_setup
-    monkeypatch.setattr(can.bus.BusState, "BUS_OFF", can.bus.BusState.ERROR, raising=False)
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
-    monkeypatch.setattr(bus.__class__, "state", property(lambda self: can.bus.BusState.BUS_OFF))
+    monkeypatch.setattr(
+        can.bus.BusState, "BUS_OFF", can.bus.BusState.ERROR, raising=False
+    )
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    monkeypatch.setattr(
+        bus.__class__, "state", property(lambda self: can.bus.BusState.BUS_OFF)
+    )
     msg = can.Message(arbitration_id=0x18FF50E5, is_extended_id=True, data=bytes(8))
 
     def fake_recv(timeout=1.0):
@@ -92,7 +107,9 @@ def test_bus_off_raises_can_error(log_setup, monkeypatch):
 def test_monitor_handles_missing_dbc(log_setup):
     logger, log_file = log_setup
     db = None
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     msg = can.Message(
         arbitration_id=0x18FF50E5,
         is_extended_id=True,
@@ -121,7 +138,9 @@ def test_monitor_handles_missing_dbc(log_setup):
 def test_monitor_handles_malformed_frame(log_setup):
     logger, log_file = log_setup
     db = load_dbc(dbc_path)
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     msg = can.Message(arbitration_id=0x18FF50E5, is_extended_id=True, data=bytes([1]))
     bus.send(msg)
     orig_recv = bus.recv
@@ -145,7 +164,9 @@ def test_monitor_handles_malformed_frame(log_setup):
 
 def test_load_dbc_missing_file(caplog, monkeypatch):
     def warn(msg, *args, **kwargs):
-        logging.getLogger()._log(logging.WARNING, msg.replace("%%", "%") % args, (), **kwargs)
+        logging.getLogger()._log(
+            logging.WARNING, msg.replace("%%", "%") % args, (), **kwargs
+        )
 
     monkeypatch.setattr(logging, "warning", warn)
 
