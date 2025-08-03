@@ -132,12 +132,9 @@ def monitor(
                     )
 
             id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
-            logger.info(
-                "id=0x%s raw=%s decoded=%s",
-                id_fmt % msg.arbitration_id,
-                msg.data.hex(),
-                decoded,
-            )
+            # Resolve the identifier once to avoid double percent escaping
+            id_str = id_fmt % msg.arbitration_id
+            logger.info("id=0x%s raw=%s decoded=%s", id_str, msg.data.hex(), decoded)
 
             if send_queue is not None:
                 payload = serialize_frame(

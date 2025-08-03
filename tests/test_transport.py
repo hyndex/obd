@@ -112,6 +112,8 @@ def test_http_transport_formats(fmt, log_setup):
         assert body["id"] == msg.arbitration_id
         assert body["raw"] == msg.data.hex()
     else:
+        # Percent signs are no longer double escaped, so the CSV payload matches
+        # the serialization output directly.
         expected = serialize_frame(
             msg.arbitration_id,
             msg.data,

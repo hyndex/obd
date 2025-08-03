@@ -74,6 +74,8 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
 
     contents = log_file.read_text()
     expected_decoded = db.decode_message(msg.arbitration_id, msg.data)
+    # The monitor now emits log lines without escaped percent signs, so we can
+    # compare the raw output directly.
     expected = (
         f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded={expected_decoded}"
     )
