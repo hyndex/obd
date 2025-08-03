@@ -9,10 +9,12 @@ CAN buses on Linux.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import subprocess
 import time
+from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 try:
@@ -117,14 +119,20 @@ def monitor(bus: "can.BusABC", db: Optional[Database], logger: logging.Logger) -
         msg = bus.recv(timeout=1.0)
         if msg is None:
             continue
-        logger.info("RAW  id=0x%%03X dlc=%%d data=%%s", msg.arbitration_id, msg.dlc, msg.data.hex())
 
+        decoded = None
         if db:
             try:
                 decoded = db.decode_message(msg.arbitration_id, msg.data)
-                logger.info("DECODED id=0x%%03X %%s", msg.arbitration_id, decoded)
             except Exception:  # pragma: no cover - depends on DBC
                 logger.debug("No DBC entry for id=0x%%03X", msg.arbitration_id)
+
+        logger.info(
+            "id=0x%%03X raw=%%s decoded=%%s",
+            msg.arbitration_id,
+            msg.data.hex(),
+            decoded,
+        )
 
         if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
             raise can.CanError("Bus-off state detected")
@@ -138,12 +146,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--interface", default="can0", help="SocketCAN interface to use")
     parser.add_argument("--log", dest="log_path", default="can.log", help="Path to log file")
     parser.add_argument("--listen-only", action="store_true", help="Enable listen-only mode")
+    parser.add_argument("--config", help="Path to JSON configuration file")
+    parser.add_argument("--log-level", help="Logging level (e.g. INFO, DEBUG)")
     args = parser.parse_args(argv)
 
+    config: dict[str, str] = {}
+    if args.config:
+        try:
+            with open(args.config, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except Exception:
+            print(f"Failed to load config file: {args.config}")
+
+    level_name = args.log_level or config.get("log_level", "INFO")
+    level = getattr(logging, str(level_name).upper(), logging.INFO)
+
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)s: %(message)s",
-        handlers=[logging.FileHandler(args.log_path), logging.StreamHandler()],
+        handlers=[
+            RotatingFileHandler(args.log_path, maxBytes=1_000_000, backupCount=5),
+            logging.StreamHandler(),
+        ],
     )
     logger = logging.getLogger(__name__)
 
