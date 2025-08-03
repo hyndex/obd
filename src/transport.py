@@ -32,14 +32,31 @@ class Transport(ABC):
 
 
 class HTTPTransport(Transport):
-    """HTTP POST transport."""
+    """HTTP POST transport.
+
+    Parameters
+    ----------
+    url:
+        Destination URL for POST requests.
+    headers:
+        Optional headers to include with requests.
+    timeout:
+        Timeout in seconds for HTTP requests. Defaults to ``5`` seconds.
+    **kwargs:
+        Additional arguments passed to :class:`Transport`.
+    """
 
     def __init__(
-        self, url: str, headers: Optional[Dict[str, str]] = None, **kwargs: Any
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: float = 5,
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self.url = url
         self.headers = headers or {}
+        self.timeout = timeout
 
     def _send_once(
         self, payload: str
@@ -49,7 +66,7 @@ class HTTPTransport(Transport):
         req = request.Request(
             self.url, data=payload.encode(), headers=self.headers, method="POST"
         )
-        with request.urlopen(req, timeout=5) as resp:
+        with request.urlopen(req, timeout=self.timeout) as resp:
             resp.read()
 
 

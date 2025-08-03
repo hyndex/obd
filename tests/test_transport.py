@@ -3,6 +3,7 @@ import os
 import threading
 import logging
 import uuid
+import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -163,6 +164,58 @@ def test_http_transport_retry(log_setup):
     server.shutdown()
     thread.join(1)
     assert server.calls == 2  # type: ignore[attr-defined]
+
+
+def test_http_transport_timeout(monkeypatch):
+    from urllib import request
+
+    call_count = {"n": 0}
+
+    def fake_urlopen(req, timeout):
+        call_count["n"] += 1
+        assert timeout == 1
+        if call_count["n"] == 1:
+            raise socket.timeout("timed out")
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b""
+
+        return Resp()
+
+    monkeypatch.setattr(request, "urlopen", fake_urlopen)
+    transport = HTTPTransport("http://example.com", timeout=1, retries=2, delay=0)
+    transport.send("data")
+    assert call_count["n"] == 2
+
+
+def test_http_transport_default_timeout(monkeypatch):
+    from urllib import request
+
+    def fake_urlopen(req, timeout):
+        assert timeout == 5
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b""
+
+        return Resp()
+
+    monkeypatch.setattr(request, "urlopen", fake_urlopen)
+    transport = HTTPTransport("http://example.com")
+    transport._send_once("data")
 
 
 def test_mqtt_transport_retry(monkeypatch):
