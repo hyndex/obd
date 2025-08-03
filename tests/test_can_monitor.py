@@ -74,8 +74,10 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
 
     contents = log_file.read_text()
     expected_decoded = db.decode_message(msg.arbitration_id, msg.data)
+    fmt = "08X" if msg.is_extended_id else "03X"
     expected = (
-        f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded={expected_decoded}"
+        f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} "
+        f"decoded={expected_decoded}"
     )
     assert expected in contents
 
@@ -130,7 +132,8 @@ def test_monitor_handles_missing_dbc(log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    expected = f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded=None"
+    fmt = "08X" if msg.is_extended_id else "03X"
+    expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} decoded=None"
     assert expected in contents
 
 
@@ -159,7 +162,8 @@ def test_monitor_handles_malformed_frame(log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    expected = f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded=None"
+    fmt = "08X" if msg.is_extended_id else "03X"
+    expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} decoded=None"
     assert expected in contents
     assert get_metrics()["decoding_failures"] == 1
 
