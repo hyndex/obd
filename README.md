@@ -46,3 +46,25 @@ These diagrams illustrate a typical wiring sequence for a common MCP2515 module.
 ### Step 3 – Connect to Vehicle
 
 ![Step 3: Connect to Vehicle](docs/mcp2515_step3_can.svg)
+
+## Dependencies
+
+The utilities and tests rely on a few Python packages:
+
+- [`python-can`](https://python-can.readthedocs.io/)
+- [`cantools`](https://cantools.readthedocs.io/)
+- [`paho-mqtt`](https://www.eclipse.org/paho/)
+
+Install them with `pip install -r requirements.txt`.
+
+## BLF Log Decoding
+
+A small helper script, `blf_decoder.py`, can decode Vector BLF log files
+using the bundled `OBD.dbc` database:
+
+```bash
+python -m blf_decoder PV11-yadwad_0004465_20250102_012231.blf
+```
+
+Pass `--dbc` to supply an alternative DBC file.  Each decoded frame is
+printed as `id`, raw hex payload and the parsed signal dictionary.
