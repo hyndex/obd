@@ -39,7 +39,7 @@ def log_setup(tmp_path):
         logger.removeHandler(handler)
 
 
-dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "ForRajesh.dbc")
+dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "OBD.dbc")
 
 
 @pytest.mark.parametrize("bitrate", [125000, 500000])

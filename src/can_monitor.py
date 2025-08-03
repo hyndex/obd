@@ -149,7 +149,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     setup_interface(args.interface, args.bitrate, args.listen_only)
 
-    dbc_path = os.path.join(os.path.dirname(__file__), "ForRajesh.dbc")
+    dbc_path = os.path.join(os.path.dirname(__file__), "OBD.dbc")
     db = load_dbc(dbc_path)
 
     if can is None:
