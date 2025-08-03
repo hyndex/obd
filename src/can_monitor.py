@@ -108,48 +108,44 @@ def monitor(
             msg = bus.recv(timeout=1.0)
             if msg is None:
                 # Avoid busy-looping when no frames are available
-                if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
-                    record_bus_error()
-                    raise can.CanError("Bus-off state detected")
                 time.sleep(0.1)
-                continue
+            else:
+                decoded = None
+                if db:
+                    try:
+                        decoded = db.decode_message(
+                            msg.arbitration_id,
+                            msg.data,
+                            decode_choices=True,
+                        )
+                    except KeyError:
+                        record_decoding_failure()
+                        logger.debug("No DBC entry for id=0x%03X", msg.arbitration_id)
+                    except Exception as exc:  # pragma: no cover - depends on DBC
+                        record_decoding_failure()
+                        logger.warning(
+                            "Decoding error for id=0x%03X: %s", msg.arbitration_id, exc
+                        )
 
-            decoded = None
-            if db:
-                try:
-                    decoded = db.decode_message(
+                id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
+                logger.info(
+                    "id=0x%s raw=%s decoded=%s",
+                    id_fmt % msg.arbitration_id,
+                    msg.data.hex(),
+                    decoded,
+                )
+
+                if send_queue is not None:
+                    payload = serialize_frame(
                         msg.arbitration_id,
                         msg.data,
-                        decode_choices=True,
+                        decoded,
+                        serializer,  # type: ignore[arg-type]
                     )
-                except KeyError:
-                    record_decoding_failure()
-                    logger.debug("No DBC entry for id=0x%03X", msg.arbitration_id)
-                except Exception as exc:  # pragma: no cover - depends on DBC
-                    record_decoding_failure()
-                    logger.warning(
-                        "Decoding error for id=0x%03X: %s", msg.arbitration_id, exc
-                    )
-
-            id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
-            logger.info(
-                "id=0x%s raw=%s decoded=%s",
-                id_fmt % msg.arbitration_id,
-                msg.data.hex(),
-                decoded,
-            )
-
-            if send_queue is not None:
-                payload = serialize_frame(
-                    msg.arbitration_id,
-                    msg.data,
-                    decoded,
-                    serializer,  # type: ignore[arg-type]
-                )
-                try:
-                    send_queue.put_nowait(payload)
-                except queue.Full:
-                    logger.warning("Transport queue full; dropping frame")
+                    try:
+                        send_queue.put_nowait(payload)
+                    except queue.Full:
+                        logger.warning("Transport queue full; dropping frame")
 
             if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
                 record_bus_error()
