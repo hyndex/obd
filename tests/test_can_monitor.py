@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+import time
 import uuid
 from unittest.mock import patch
 
@@ -166,6 +168,66 @@ def test_monitor_handles_malformed_frame(log_setup):
     expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} decoded=None"
     assert expected in contents
     assert get_metrics()["decoding_failures"] == 1
+
+
+def test_monitor_continues_with_slow_transport(log_setup):
+    logger, _ = log_setup
+    db = load_dbc(dbc_path)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+
+    msg = can.Message(
+        arbitration_id=db.messages[0].frame_id,
+        is_extended_id=True,
+        data=bytes([1, 2, 3, 4, 5, 6, 7, 8]),
+    )
+    bus.send(msg)
+    bus.send(msg)
+
+    orig_recv = bus.recv
+    calls = 0
+
+    def fake_recv(timeout=1.0):
+        nonlocal calls
+        if calls < 2:
+            calls += 1
+            return orig_recv(timeout)
+        raise can.CanError("stop")
+
+    class SlowTransport:
+        def __init__(self) -> None:
+            self.count = 0
+            self.event = threading.Event()
+
+        def send(self, payload: str) -> None:  # pragma: no cover - timing dependent
+            self.count += 1
+            if self.count == 1:
+                self.event.wait()
+
+    transport = SlowTransport()
+
+    errors: list[Exception] = []
+
+    def run_monitor() -> None:
+        try:
+            monitor(bus, db, logger, serializer="json", transport=transport)
+        except Exception as exc:  # pragma: no cover - we capture for assertion
+            errors.append(exc)
+
+    with patch.object(bus, "recv", side_effect=fake_recv):
+        t = threading.Thread(target=run_monitor)
+        t.start()
+        while transport.count < 1:
+            time.sleep(0.01)
+        while calls < 2:
+            time.sleep(0.01)
+        assert transport.count == 1
+        transport.event.set()
+        t.join(1)
+
+    assert errors and isinstance(errors[0], can.CanError)
+    assert transport.count == 2
 
 
 def test_load_dbc_missing_file(caplog):
