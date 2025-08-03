@@ -30,14 +30,9 @@ def log_setup(tmp_path):
     logger = logging.getLogger(f"test_{uuid.uuid4().hex}")
     logger.setLevel(logging.INFO)
     handler = logging.FileHandler(log_file)
+    handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
     logger.propagate = False
-
-    def info(msg, *args, **kwargs):
-        formatted = msg.replace("%%", "%") % args
-        logger._log(logging.INFO, formatted, (), **kwargs)
-
-    logger.info = info  # type: ignore[assignment]
 
     try:
         yield logger, log_file
@@ -80,7 +75,7 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
     contents = log_file.read_text()
     expected_decoded = db.decode_message(msg.arbitration_id, msg.data)
     expected = (
-        f"id=0x{msg.arbitration_id:03X} raw={msg.data.hex()} decoded={expected_decoded}"
+        f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded={expected_decoded}"
     )
     assert expected in contents
 
@@ -135,7 +130,7 @@ def test_monitor_handles_missing_dbc(log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    expected = f"id=0x{msg.arbitration_id:03X} raw={msg.data.hex()} decoded=None"
+    expected = f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded=None"
     assert expected in contents
 
 
@@ -164,19 +159,12 @@ def test_monitor_handles_malformed_frame(log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    expected = f"id=0x{msg.arbitration_id:03X} raw={msg.data.hex()} decoded=None"
+    expected = f"id=0x{msg.arbitration_id:08X} raw={msg.data.hex()} decoded=None"
     assert expected in contents
     assert get_metrics()["decoding_failures"] == 1
 
 
-def test_load_dbc_missing_file(caplog, monkeypatch):
-    def warn(msg, *args, **kwargs):
-        logging.getLogger()._log(
-            logging.WARNING, msg.replace("%%", "%") % args, (), **kwargs
-        )
-
-    monkeypatch.setattr(logging, "warning", warn)
-
+def test_load_dbc_missing_file(caplog):
     with caplog.at_level(logging.WARNING):
         db = load_dbc("does_not_exist.dbc")
     assert db is None

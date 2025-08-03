@@ -1,4 +1,5 @@
 """Transport modules for sending serialized frames."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -33,16 +34,22 @@ class Transport(ABC):
 class HTTPTransport(Transport):
     """HTTP POST transport."""
 
-    def __init__(self, url: str, headers: Optional[Dict[str, str]] = None, **kwargs: Any) -> None:
+    def __init__(
+        self, url: str, headers: Optional[Dict[str, str]] = None, **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self.url = url
         self.headers = headers or {}
 
-    def _send_once(self, payload: str) -> None:  # pragma: no cover - network errors not deterministic
+    def _send_once(
+        self, payload: str
+    ) -> None:  # pragma: no cover - network errors not deterministic
         from urllib import request
 
-        req = request.Request(self.url, data=payload.encode(), headers=self.headers, method="POST")
-        with request.urlopen(req) as resp:
+        req = request.Request(
+            self.url, data=payload.encode(), headers=self.headers, method="POST"
+        )
+        with request.urlopen(req, timeout=5) as resp:
             resp.read()
 
 
@@ -54,7 +61,9 @@ class MQTTTransport(Transport):
         self.topic = topic
         self.hostname = hostname
 
-    def _send_once(self, payload: str) -> None:  # pragma: no cover - depends on external lib
+    def _send_once(
+        self, payload: str
+    ) -> None:  # pragma: no cover - depends on external lib
         try:
             from paho.mqtt import publish
         except Exception as exc:  # ImportError

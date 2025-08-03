@@ -8,7 +8,7 @@ be mocked during unit tests or replaced for alternative hardware variants.
 from __future__ import annotations
 
 import logging
-import os
+import subprocess
 from typing import Protocol, Sequence
 
 
@@ -23,13 +23,13 @@ class CommandRunner(Protocol):
 
 
 class SystemCommands:
-    """Run commands on the host system using :func:`os.system`."""
+    """Run commands on the host system using :func:`subprocess.run`."""
 
     def modprobe(self, module: str) -> int:
-        return os.system(f"modprobe {module}")
+        return subprocess.run(["modprobe", module], check=False).returncode
 
     def ip(self, args: Sequence[str]) -> int:
-        return os.system("ip " + " ".join(args))
+        return subprocess.run(["ip", *args], check=False).returncode
 
 
 class MockCommands:
@@ -83,7 +83,7 @@ def setup_interface(
     if cmd.ip(["link", "set", interface, "down"]) != 0:
         logging.warning("Failed to bring down %s", interface)
 
-    ip_args = [
+    up_args = [
         "link",
         "set",
         interface,
@@ -93,8 +93,22 @@ def setup_interface(
         "bitrate",
         str(bitrate),
     ]
-    if listen_only:
-        ip_args += ["listen-only", "on"]
-
-    if cmd.ip(ip_args) != 0:
+    if cmd.ip(up_args) != 0:
         logging.warning("Failed to configure %s", interface)
+
+    if listen_only:
+        if (
+            cmd.ip(
+                [
+                    "link",
+                    "set",
+                    interface,
+                    "type",
+                    "can",
+                    "listen-only",
+                    "on",
+                ]
+            )
+            != 0
+        ):
+            logging.warning("Failed to enable listen-only mode on %s", interface)

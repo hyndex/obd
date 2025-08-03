@@ -13,5 +13,6 @@ def test_setup_interface_builds_commands():
         "modprobe can",
         "modprobe can_raw",
         "ip link set can0 down",
-        "ip link set can0 up type can bitrate 250000 listen-only on",
+        "ip link set can0 up type can bitrate 250000",
+        "ip link set can0 type can listen-only on",
     ]
