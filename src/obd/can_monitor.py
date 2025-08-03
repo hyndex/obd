@@ -9,11 +9,12 @@ CAN buses on Linux.
 from __future__ import annotations
 
 import argparse
+import configparser
 import logging
 import os
 import subprocess
 import time
-from typing import Optional
+from typing import Optional, Dict, Any
 
 try:
     import can
@@ -94,9 +95,9 @@ def load_dbc(dbc_path: str) -> Optional[Database]:
     try:
         return cantools.database.load_file(dbc_path)
     except FileNotFoundError:
-        logging.warning("DBC file not found: %%s", dbc_path)
+        logging.warning("DBC file not found: %s", dbc_path)
     except Exception as exc:  # pragma: no cover - cantools errors
-        logging.warning("Failed to load DBC: %%s", exc)
+        logging.warning("Failed to load DBC: %s", exc)
     return None
 
 
@@ -130,24 +131,60 @@ def monitor(bus: "can.BusABC", db: Optional[Database], logger: logging.Logger) -
             raise can.CanError("Bus-off state detected")
 
 
+def load_config(path: str) -> Dict[str, Any]:
+    """Load defaults from an INI configuration file.
+
+    Parameters
+    ----------
+    path:
+        Path to the configuration file. Missing files are ignored.
+
+    Returns
+    -------
+    dict
+        Mapping with keys ``interface``, ``bitrate`` and ``log_path``.
+    """
+
+    parser = configparser.ConfigParser()
+    defaults: Dict[str, Any] = {
+        "interface": "can0",
+        "bitrate": 500000,
+        "log_path": "can.log",
+    }
+    if path and os.path.exists(path):
+        parser.read(path)
+        if parser.has_section("can"):
+            section = parser["can"]
+            defaults["interface"] = section.get("interface", defaults["interface"])
+            defaults["bitrate"] = section.getint("bitrate", defaults["bitrate"])
+            defaults["log_path"] = section.get("log_path", section.get("log", defaults["log_path"]))
+    return defaults
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point for command-line execution."""
 
     parser = argparse.ArgumentParser(description="Monitor a SocketCAN bus and decode messages")
-    parser.add_argument("--bitrate", type=int, default=500000, help="CAN bitrate in bits per second")
-    parser.add_argument("--interface", default="can0", help="SocketCAN interface to use")
-    parser.add_argument("--log", dest="log_path", default="can.log", help="Path to log file")
+    parser.add_argument("--config", help="Path to configuration file")
+    parser.add_argument("--bitrate", type=int, help="CAN bitrate in bits per second")
+    parser.add_argument("--interface", help="SocketCAN interface to use")
+    parser.add_argument("--log", dest="log_path", help="Path to log file")
     parser.add_argument("--listen-only", action="store_true", help="Enable listen-only mode")
     args = parser.parse_args(argv)
+
+    defaults = load_config(args.config or "can_monitor.ini")
+    interface = args.interface or defaults["interface"]
+    bitrate = args.bitrate or defaults["bitrate"]
+    log_path = args.log_path or defaults["log_path"]
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s: %(message)s",
-        handlers=[logging.FileHandler(args.log_path), logging.StreamHandler()],
+        handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
     )
     logger = logging.getLogger(__name__)
 
-    setup_interface(args.interface, args.bitrate, args.listen_only)
+    setup_interface(interface, bitrate, args.listen_only)
 
     dbc_path = os.path.join(os.path.dirname(__file__), "OBD.dbc")
     db = load_dbc(dbc_path)
@@ -158,20 +195,20 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     while True:
         try:
-            with can.interface.Bus(bustype="socketcan", channel=args.interface, receive_own_messages=False) as bus:
-                logger.info("Connected to %%s", args.interface)
+            with can.interface.Bus(bustype="socketcan", channel=interface, receive_own_messages=False) as bus:
+                logger.info("Connected to %s", interface)
                 monitor(bus, db, logger)
         except can.CanError as exc:  # pragma: no cover - runtime CAN errors
-            logger.error("CAN error: %%s. Restarting interface...", exc)
+            logger.error("CAN error: %s. Restarting interface...", exc)
             time.sleep(1)
-            setup_interface(args.interface, args.bitrate, args.listen_only)
+            setup_interface(interface, bitrate, args.listen_only)
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             break
         except Exception as exc:  # pragma: no cover - unexpected
-            logger.exception("Unexpected error: %%s", exc)
+            logger.exception("Unexpected error: %s", exc)
             time.sleep(1)
-            setup_interface(args.interface, args.bitrate, args.listen_only)
+            setup_interface(interface, bitrate, args.listen_only)
 
     return 0
 

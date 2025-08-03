@@ -9,9 +9,10 @@ import pytest
 import sys
 from pathlib import Path
 
+# Ensure the package in ``src`` is importable without installation
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from can_monitor import load_dbc, monitor
+from obd.can_monitor import load_dbc, monitor
 
 if not hasattr(can.bus.BusState, "BUS_OFF"):
     setattr(can.bus.BusState, "BUS_OFF", can.bus.BusState.ERROR)
@@ -39,7 +40,7 @@ def log_setup(tmp_path):
         logger.removeHandler(handler)
 
 
-dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "OBD.dbc")
+dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "obd", "OBD.dbc")
 
 
 @pytest.mark.parametrize("bitrate", [125000, 500000])
