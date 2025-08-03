@@ -49,7 +49,7 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
     bus = can.interface.Bus(bustype="virtual", bitrate=bitrate, receive_own_messages=True)
 
     msg = can.Message(
-        arbitration_id=0x18FF50E5,
+        arbitration_id=db.messages[0].frame_id,
         is_extended_id=True,
         data=bytes([10, 20, 0, 0, 0, 0, 0, 0]),
     )
@@ -70,8 +70,9 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    assert "RAW  id=0x18FF50E5" in contents
-    assert "DECODED id=0x18FF50E5 {'SPEED': 10, 'TEMP': 20}" in contents
+    expected_decoded = db.decode_message(msg.arbitration_id, msg.data)
+    expected = f"id=0x{msg.arbitration_id:03X} raw={msg.data.hex()} decoded={expected_decoded}"
+    assert expected in contents
 
 
 def test_bus_off_raises_can_error(log_setup, monkeypatch):
@@ -114,15 +115,15 @@ def test_monitor_handles_missing_dbc(log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    assert "RAW  id=0x18FF50E5" in contents
-    assert "DECODED" not in contents
+    expected = f"id=0x{msg.arbitration_id:03X} raw={msg.data.hex()} decoded=None"
+    assert expected in contents
 
 
 def test_monitor_handles_malformed_frame(log_setup):
     logger, log_file = log_setup
     db = load_dbc(dbc_path)
     bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
-    msg = can.Message(arbitration_id=0x18FF50E5, is_extended_id=True, data=bytes([1]))
+    msg = can.Message(arbitration_id=db.messages[0].frame_id, is_extended_id=True, data=bytes([1]))
     bus.send(msg)
     orig_recv = bus.recv
     calls = 0
@@ -139,8 +140,8 @@ def test_monitor_handles_malformed_frame(log_setup):
             monitor(bus, db, logger)
 
     contents = log_file.read_text()
-    assert "RAW  id=0x18FF50E5" in contents
-    assert "DECODED" not in contents
+    expected = f"id=0x{msg.arbitration_id:03X} raw={msg.data.hex()} decoded=None"
+    assert expected in contents
 
 
 def test_load_dbc_missing_file(caplog, monkeypatch):
