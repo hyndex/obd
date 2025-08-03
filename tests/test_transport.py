@@ -11,11 +11,13 @@ import can
 import pytest
 
 import sys
+
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from can_monitor import load_dbc, monitor
-from serialization import serialize_frame
-from transport import HTTPTransport, MQTTTransport
+from can_monitor import load_dbc, monitor  # noqa: E402
+from serialization import serialize_frame  # noqa: E402
+from transport import HTTPTransport, MQTTTransport  # noqa: E402
+from metrics import reset_metrics  # noqa: E402
 
 
 dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "OBD.dbc")
@@ -40,6 +42,11 @@ def log_setup(tmp_path):
         yield logger, log_file
     finally:
         logger.removeHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _reset_metrics_auto():
+    reset_metrics()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -76,8 +83,14 @@ def test_http_transport_formats(fmt, log_setup):
     headers = {"Content-Type": "application/json" if fmt == "json" else "text/csv"}
     transport = HTTPTransport(url, headers=headers, retries=1, delay=0)
 
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
-    msg = can.Message(arbitration_id=db.messages[0].frame_id, is_extended_id=True, data=bytes([1, 2, 0, 0, 0, 0, 0, 0]))
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    msg = can.Message(
+        arbitration_id=db.messages[0].frame_id,
+        is_extended_id=True,
+        data=bytes([1, 2, 0, 0, 0, 0, 0, 0]),
+    )
     bus.send(msg)
 
     orig_recv = bus.recv
@@ -104,7 +117,12 @@ def test_http_transport_formats(fmt, log_setup):
         assert body["id"] == msg.arbitration_id
         assert body["raw"] == msg.data.hex()
     else:
-        expected = serialize_frame(msg.arbitration_id, msg.data, db.decode_message(msg.arbitration_id, msg.data), "csv")
+        expected = serialize_frame(
+            msg.arbitration_id,
+            msg.data,
+            db.decode_message(msg.arbitration_id, msg.data),
+            "csv",
+        )
         assert payload.strip() == expected
 
 
@@ -119,10 +137,18 @@ def test_http_transport_retry(log_setup):
     thread = threading.Thread(target=_run_server, args=(server,), daemon=True)
     thread.start()
     url = f"http://localhost:{server.server_port}"
-    transport = HTTPTransport(url, headers={"Content-Type": "application/json"}, retries=2, delay=0)
+    transport = HTTPTransport(
+        url, headers={"Content-Type": "application/json"}, retries=2, delay=0
+    )
 
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
-    msg = can.Message(arbitration_id=db.messages[0].frame_id, is_extended_id=True, data=bytes([1, 2, 0, 0, 0, 0, 0, 0]))
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    msg = can.Message(
+        arbitration_id=db.messages[0].frame_id,
+        is_extended_id=True,
+        data=bytes([1, 2, 0, 0, 0, 0, 0, 0]),
+    )
     bus.send(msg)
 
     orig_recv = bus.recv
