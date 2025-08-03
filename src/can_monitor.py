@@ -114,6 +114,8 @@ def monitor(
                 time.sleep(0.1)
                 continue
 
+            id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
+
             decoded = None
             if db:
                 try:
@@ -124,14 +126,17 @@ def monitor(
                     )
                 except KeyError:
                     record_decoding_failure()
-                    logger.debug("No DBC entry for id=0x%03X", msg.arbitration_id)
+                    logger.debug(
+                        "No DBC entry for id=0x%s", id_fmt % msg.arbitration_id
+                    )
                 except Exception as exc:  # pragma: no cover - depends on DBC
                     record_decoding_failure()
                     logger.warning(
-                        "Decoding error for id=0x%03X: %s", msg.arbitration_id, exc
+                        "Decoding error for id=0x%s: %s",
+                        id_fmt % msg.arbitration_id,
+                        exc,
                     )
 
-            id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
             logger.info(
                 "id=0x%s raw=%s decoded=%s",
                 id_fmt % msg.arbitration_id,
