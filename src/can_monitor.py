@@ -17,6 +17,9 @@ import time
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
+from serialization import serialize_frame
+from transport import Transport
+
 try:
     import can
 except ImportError:  # pragma: no cover - dependency is optional at import time
@@ -102,7 +105,14 @@ def load_dbc(dbc_path: str) -> Optional[Database]:
     return None
 
 
-def monitor(bus: "can.BusABC", db: Optional[Database], logger: logging.Logger) -> None:
+def monitor(
+    bus: "can.BusABC",
+    db: Optional[Database],
+    logger: logging.Logger,
+    *,
+    serializer: Optional[str] = None,
+    transport: Optional[Transport] = None,
+) -> None:
     """Continuously read from the bus and log frames.
 
     Parameters
@@ -133,6 +143,10 @@ def monitor(bus: "can.BusABC", db: Optional[Database], logger: logging.Logger) -
             msg.data.hex(),
             decoded,
         )
+
+        if serializer and transport:
+            payload = serialize_frame(msg.arbitration_id, msg.data, decoded, serializer)
+            transport.send(payload)
 
         if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
             raise can.CanError("Bus-off state detected")
