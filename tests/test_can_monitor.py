@@ -72,7 +72,7 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
 
     with pytest.raises(can.CanError):
         with patch.object(bus, "recv", side_effect=fake_recv):
-            monitor(bus, db, logger)
+            monitor(bus, db, logger, print_raw=True)
 
     contents = log_file.read_text()
     expected_decoded = db.decode_message(msg.arbitration_id, msg.data)
@@ -81,6 +81,42 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
         f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} "
         f"decoded={expected_decoded}"
     )
+    assert expected in contents
+
+
+def test_monitor_without_print_raw(log_setup):
+    logger, log_file = log_setup
+    db = load_dbc(dbc_path)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+
+    msg = can.Message(
+        arbitration_id=db.messages[0].frame_id,
+        is_extended_id=True,
+        data=bytes([10, 20, 0, 0, 0, 0, 0, 0]),
+    )
+    bus.send(msg)
+
+    orig_recv = bus.recv
+    calls = 0
+
+    def fake_recv(timeout=1.0):
+        nonlocal calls
+        if calls == 0:
+            calls += 1
+            return orig_recv(timeout)
+        raise can.CanError("stop")
+
+    with pytest.raises(can.CanError):
+        with patch.object(bus, "recv", side_effect=fake_recv):
+            monitor(bus, db, logger)
+
+    contents = log_file.read_text()
+    assert "raw=" not in contents
+    expected_decoded = db.decode_message(msg.arbitration_id, msg.data)
+    fmt = "08X" if msg.is_extended_id else "03X"
+    expected = f"id=0x{msg.arbitration_id:{fmt}} decoded={expected_decoded}"
     assert expected in contents
 
 
@@ -131,11 +167,11 @@ def test_monitor_handles_missing_dbc(log_setup):
 
     with pytest.raises(can.CanError):
         with patch.object(bus, "recv", side_effect=fake_recv):
-            monitor(bus, db, logger)
+            monitor(bus, db, logger, print_raw=True)
 
     contents = log_file.read_text()
     fmt = "08X" if msg.is_extended_id else "03X"
-    expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} decoded=None"
+    expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()}"
     assert expected in contents
 
 
@@ -161,11 +197,11 @@ def test_monitor_handles_malformed_frame(log_setup):
 
     with pytest.raises(can.CanError):
         with patch.object(bus, "recv", side_effect=fake_recv):
-            monitor(bus, db, logger)
+            monitor(bus, db, logger, print_raw=True)
 
     contents = log_file.read_text()
     fmt = "08X" if msg.is_extended_id else "03X"
-    expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()} decoded=None"
+    expected = f"id=0x{msg.arbitration_id:{fmt}} raw={msg.data.hex()}"
     assert expected in contents
     assert get_metrics()["decoding_failures"] == 1
 

@@ -79,6 +79,7 @@ Additional options:
 - `--log can.log` – change log file path.
 - `--log-level DEBUG` – increase verbosity.
 - `--listen-only` – avoid transmitting frames.
+- `--print-raw` – include raw CAN payloads in the log.
 - `--config settings.json` – load options from a JSON file (currently only `log_level`).
 
 Example `settings.json`:
@@ -89,8 +90,10 @@ Example `settings.json`:
 }
 ```
 
-The log records raw and decoded frames.  When decoding fails, the log includes a
-message and the metrics counter `decoding_failures` is incremented.
+When `--print-raw` is supplied, the log records the raw CAN payload for each
+frame and, when decoding succeeds, the decoded signal dictionary.  When decoding
+fails, the log includes a message and the metrics counter `decoding_failures` is
+incremented.
 
 **Potential issues**
 - `python-can is required but not installed`: install dependencies with pip.
