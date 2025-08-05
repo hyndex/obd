@@ -74,6 +74,7 @@ def monitor(
     *,
     serializer: Optional[str] = None,
     transport: Optional[Transport] = None,
+    print_raw: bool = False,
 ) -> None:
     """Continuously read from the bus and log frames.
 
@@ -85,6 +86,14 @@ def monitor(
         Parsed DBC database or ``None`` if decoding is unavailable.
     logger:
         Logger used for output.
+    serializer:
+        Optional serialization format used when sending frames through
+        ``transport``.
+    transport:
+        Optional transport used to forward serialized frames.
+    print_raw:
+        If ``True``, each received frame is logged with its raw payload
+        and, when decoding succeeds, the decoded signal values.
     """
 
     send_queue: queue.Queue[str] | None = None
@@ -137,12 +146,17 @@ def monitor(
                         exc,
                     )
 
-            logger.info(
-                "id=0x%s raw=%s decoded=%s",
-                id_fmt % msg.arbitration_id,
-                msg.data.hex(),
-                decoded,
-            )
+            if print_raw:
+                base = f"id=0x{id_fmt % msg.arbitration_id} raw={msg.data.hex()}"
+                if decoded is not None:
+                    base += f" decoded={decoded}"
+                logger.info(base)
+            elif decoded is not None:
+                logger.info(
+                    "id=0x%s decoded=%s",
+                    id_fmt % msg.arbitration_id,
+                    decoded,
+                )
 
             if send_queue is not None:
                 payload = serialize_frame(
@@ -181,6 +195,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument(
         "--listen-only", action="store_true", help="Enable listen-only mode"
+    )
+    parser.add_argument(
+        "--print-raw",
+        action="store_true",
+        help="Print raw CAN frames alongside decoded data",
     )
     parser.add_argument("--config", help="Path to JSON configuration file")
     parser.add_argument("--log-level", help="Logging level (e.g. INFO, DEBUG)")
@@ -225,7 +244,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 bustype="socketcan", channel=args.interface, receive_own_messages=False
             ) as bus:
                 logger.info("Connected to %s", args.interface)
-                monitor(bus, db, logger)
+                monitor(bus, db, logger, print_raw=args.print_raw)
                 delay = 1.0
         except can.CanError as exc:  # pragma: no cover - runtime CAN errors
             record_bus_error()
