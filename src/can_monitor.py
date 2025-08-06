@@ -7,12 +7,12 @@ for listen-only mode on modern python-can versions and tolerates removal
 of the BUS_OFF enum, preventing controller lockouts.
 """
 
-from _future_ import annotations
+from __future__ import annotations
 
 import argparse
 import json
 import logging
-import os
+from pathlib import Path
 import time
 import threading
 import queue
@@ -88,6 +88,7 @@ def monitor(
         except Exception:
             return False
 
+    missing_ids: set[int] = set()
     try:
         while True:
             msg = bus.recv(timeout=1.0)
@@ -109,7 +110,15 @@ def monitor(
                     )
                 except KeyError:
                     record_decoding_failure()
-                    logger.debug("No DBC entry for id=0x%s", fmt % msg.arbitration_id)
+                    if msg.arbitration_id not in missing_ids:
+                        missing_ids.add(msg.arbitration_id)
+                        logger.info(
+                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                        )
+                    else:
+                        logger.debug(
+                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                        )
                 except Exception as exc:
                     record_decoding_failure()
                     logger.warning(
@@ -188,13 +197,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             logging.StreamHandler(),
         ],
     )
-    logger = logging.getLogger(_name_)
+    logger = logging.getLogger(__name__)
+
+    dbc_path = Path(__file__).with_name("OBD.dbc")
+    db = load_dbc(str(dbc_path))
+    if db is None:
+        logger.warning("DBC not loaded, decoding will be skipped!")
+    else:
+        logger.info("DBC loaded with %d messages", len(db.messages))
 
     # bring up the CAN interface
     setup_interface(args.interface, args.bitrate, args.listen_only)
-
-    dbc_path = os.path.join(os.path.dirname(_file_), "OBD.dbc")
-    db = load_dbc(dbc_path)
 
     if can is None:
         logger.error("python-can is required but not installed")
@@ -233,5 +246,5 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     raise SystemExit(main())
