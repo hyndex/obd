@@ -54,8 +54,13 @@ The utilities and tests rely on a few Python packages:
 - [`python-can`](https://python-can.readthedocs.io/)
 - [`cantools`](https://cantools.readthedocs.io/)
 - [`paho-mqtt`](https://www.eclipse.org/paho/)
+- [`opendbc`](https://github.com/commaai/opendbc) – optional, used as a fallback set of community DBC files
 
 Install them with `pip install -r requirements.txt`.
+
+If the bundled `OBD.dbc` cannot be loaded, the CAN monitor will
+automatically fall back to the community DBC files provided by
+[`opendbc`](https://github.com/commaai/opendbc).
 
 ## Usage Guide
 
