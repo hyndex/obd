@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from pathlib import Path
 import os
 import time
 import threading
@@ -258,6 +257,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--interface", default="can0", help="SocketCAN interface to use"
     )
     parser.add_argument(
+        "--dbc",
+        dest="dbc_path",
+        default=os.path.join(os.path.dirname(__file__), "OBD.dbc"),
+        help="Path to the DBC file to use for decoding",
+    )
+    parser.add_argument(
         "--log", dest="log_path", default="can.log", help="Path to log file"
     )
     parser.add_argument(
@@ -293,8 +298,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     logger = logging.getLogger(__name__)
 
-    dbc_path = Path(__file__).with_name("OBD.dbc")
-    db = load_dbc(str(dbc_path))
+    db = load_dbc(args.dbc_path)
     fallback_dbs: list[Database] = []
     if db is None:
         logger.warning("Custom DBC failed to load; attempting opendbc fallback")
