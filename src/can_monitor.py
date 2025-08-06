@@ -13,6 +13,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+import os
 import time
 import threading
 import queue
@@ -56,6 +57,70 @@ def load_dbc(dbc_path: str) -> Optional[Database]:
     return None
 
 
+def select_best_dbc(dbc_paths: list[str], bus: "can.BusABC") -> Optional[str]:
+    """Pick the DBC file that best matches observed CAN traffic."""
+    if not cantools:
+        return None
+
+    seen_ids: dict[int, int] = {}
+    for _ in range(100):
+        msg = bus.recv(timeout=0.1)
+        if not msg:
+            continue
+        seen_ids[msg.arbitration_id] = len(msg.data)
+
+    best_score = 0
+    best_path: Optional[str] = None
+    for path in dbc_paths:
+        try:
+            candb = cantools.database.load_file(path)
+        except Exception:
+            continue
+        score = 0
+        for mid, dlc in seen_ids.items():
+            try:
+                msg_def = candb.get_message_by_frame_id(mid)
+            except KeyError:
+                msg_def = None
+            if msg_def and msg_def.length == dlc:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_path = path
+    return best_path
+
+
+def load_opendbc_dbs(bus: "can.BusABC") -> tuple[Optional[Database], list[Database]]:
+    """Load opendbc databases either as a single best match or a list."""
+    if not cantools:
+        logging.warning("cantools library not installed; decoding disabled")
+        return None, []
+
+    try:
+        import opendbc  # type: ignore
+    except Exception:
+        logging.error("Install commaai/opendbc to enable DBC fallback decoding")
+        return None, []
+
+    dbc_paths = [
+        os.path.join(root, f)
+        for root, _, files in os.walk(opendbc.DBC_PATH)
+        for f in files
+        if f.endswith(".dbc")
+    ]
+    logging.info("Found %d DBC files in opendbc", len(dbc_paths))
+
+    selected = select_best_dbc(dbc_paths, bus)
+    if selected:
+        db = cantools.database.load_file(selected)
+        logging.info("Loaded fallback DBC: %s", os.path.basename(selected))
+        return db, []
+
+    fallback_dbs = [cantools.database.load_file(p) for p in dbc_paths]
+    logging.info("Loaded all opendbc DBC files for decoding fallback")
+    return None, fallback_dbs
+
+
 def monitor(
     bus: "can.BusABC",
     db: Optional[Database],
@@ -64,6 +129,7 @@ def monitor(
     serializer: Optional[str] = None,
     transport: Optional[Transport] = None,
     print_raw: bool = False,
+    fallback_dbs: Optional[list[Database]] = None,
 ) -> None:
     send_queue: queue.Queue[str] | None = None
     if serializer and transport:
@@ -124,20 +190,48 @@ def monitor(
                     logger.warning(
                         "Decoding error for id=0x%s: %s", fmt % msg.arbitration_id, exc
                     )
+            elif fallback_dbs:
+                for candb in fallback_dbs:
+                    try:
+                        decoded = candb.decode_message(
+                            msg.arbitration_id, msg.data, decode_choices=True
+                        )
+                        break
+                    except KeyError:
+                        continue
+                    except Exception as exc:
+                        record_decoding_failure()
+                        logger.warning(
+                            "Decoding error for id=0x%s: %s",
+                            fmt % msg.arbitration_id,
+                            exc,
+                        )
+                if decoded is None:
+                    record_decoding_failure()
+                    if msg.arbitration_id not in missing_ids:
+                        missing_ids.add(msg.arbitration_id)
+                        logger.info(
+                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                        )
+                    else:
+                        logger.debug(
+                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                        )
 
             if print_raw:
-                line = f"id=0x{fmt%msg.arbitration_id} raw={raw}"
+                line = f"id=0x{fmt % msg.arbitration_id} raw={raw}"
                 if decoded is not None:
                     line += f" decoded={decoded}"
                 logger.info(line)
             elif decoded is not None:
-                logger.info(
-                    "id=0x%s decoded=%s", fmt % msg.arbitration_id, decoded
-                )
+                logger.info("id=0x%s decoded=%s", fmt % msg.arbitration_id, decoded)
 
             if send_queue is not None:
                 payload = serialize_frame(
-                    msg.arbitration_id, msg.data, decoded, serializer  # type: ignore[arg-type]
+                    msg.arbitration_id,
+                    msg.data,
+                    decoded,
+                    serializer,  # type: ignore[arg-type]
                 )
                 try:
                     send_queue.put_nowait(payload)
@@ -201,8 +295,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     dbc_path = Path(__file__).with_name("OBD.dbc")
     db = load_dbc(str(dbc_path))
+    fallback_dbs: list[Database] = []
     if db is None:
-        logger.warning("DBC not loaded, decoding will be skipped!")
+        logger.warning("Custom DBC failed to load; attempting opendbc fallback")
     else:
         logger.info("DBC loaded with %d messages", len(db.messages))
 
@@ -223,7 +318,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                 receive_own_messages=False,
             ) as bus:
                 logger.info("Connected to %s", args.interface)
-                monitor(bus, db, logger, print_raw=args.print_raw)
+                if db is None and not fallback_dbs:
+                    db, fallback_dbs = load_opendbc_dbs(bus)
+                monitor(
+                    bus,
+                    db,
+                    logger,
+                    print_raw=args.print_raw,
+                    fallback_dbs=fallback_dbs,
+                )
                 delay = 1.0
         except can.CanError as exc:
             record_bus_error()

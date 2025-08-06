@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from can_monitor import load_dbc, monitor  # noqa: E402
+from can_monitor import load_dbc, load_opendbc_dbs, monitor  # noqa: E402
 from metrics import get_metrics, reset_metrics  # noqa: E402
 
 if not hasattr(can.bus.BusState, "BUS_OFF"):
@@ -271,3 +271,84 @@ def test_load_dbc_missing_file(caplog):
         db = load_dbc("does_not_exist.dbc")
     assert db is None
     assert "DBC file not found" in caplog.text
+
+
+def test_opendbc_fallback_selects_best_dbc(tmp_path):
+    """Ensure opendbc fallback loads the best matching DBC."""
+    header = (
+        'VERSION ""\n'
+        "\n"
+        "NS_ :\n"
+        "    NS_DESC_\n"
+        "    CM_\n"
+        "    BA_DEF_\n"
+        "    BA_\n"
+        "    VAL_\n"
+        "    CAT_DEF_\n"
+        "    CAT_\n"
+        "    FILTER\n"
+        "    BA_DEF_DEF_\n"
+        "    EV_DATA_\n"
+        "    ENVVAR_DATA_\n"
+        "    SGTYPE_\n"
+        "    SGTYPE_VAL_\n"
+        "    BA_DEF_SGTYPE_\n"
+        "    BA_SGTYPE_\n"
+        "    SIG_TYPE_REF_\n"
+        "    VAL_TABLE_\n"
+        "    SIG_GROUP_\n"
+        "    SIG_VALTYPE_\n"
+        "    SIGTYPE_VALTYPE_\n"
+        "    BO_TX_BU_\n"
+        "    BA_DEF_REL_\n"
+        "    BA_REL_\n"
+        "    BA_DEF_DEF_REL_\n"
+        "    BU_SG_REL_\n"
+        "    BU_EV_REL_\n"
+        "    BU_BO_REL_\n"
+        "    SG_MUL_VAL_\n"
+        "\n"
+        "BS_:\n"
+        "\n"
+        "BU_:\n"
+        "\n"
+    )
+
+    def write_dbc(path, msg_id):
+        body = (
+            f"BO_ {msg_id} MSG: 8 Vector__XXX\n"
+            ' SG_ SIG : 0|8@1+ (1,0) [0|255] "" Vector__XXX\n'
+        )
+        path.write_text(header + body)
+
+    dbc1 = tmp_path / "car1.dbc"
+    dbc2 = tmp_path / "car2.dbc"
+    write_dbc(dbc1, 0x100)
+    write_dbc(dbc2, 0x200)
+
+    dummy = type("Opendbc", (), {"DBC_PATH": str(tmp_path)})
+
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    msg = can.Message(arbitration_id=0x100, is_extended_id=False, data=bytes(8))
+    bus.send(msg)
+
+    orig_recv = bus.recv
+    calls = 0
+
+    def fake_recv(timeout=0.1):
+        nonlocal calls
+        if calls == 0:
+            calls += 1
+            return orig_recv(timeout)
+        calls += 1
+        return None
+
+    with patch.object(bus, "recv", side_effect=fake_recv):
+        with patch.dict(sys.modules, {"opendbc": dummy}):
+            db, fallbacks = load_opendbc_dbs(bus)
+
+    assert fallbacks == []
+    assert db is not None
+    assert db.get_message_by_frame_id(0x100)
