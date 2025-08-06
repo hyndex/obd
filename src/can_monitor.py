@@ -1,12 +1,13 @@
+#!/usr/bin/env python3
 """CAN bus monitor for SocketCAN interfaces.
 
 This module sets up a SocketCAN interface, loads a DBC file, and
-continuously logs raw and decoded CAN messages.  It is intended as a
-maintenance tool and example implementation for developers working with
-CAN buses on Linux.
+continuously logs raw and decoded CAN messages.  It includes support
+for listen-only mode on modern python-can versions and tolerates removal
+of the BUS_OFF enum, preventing controller lockouts.
 """
 
-from __future__ import annotations
+from _future_ import annotations
 
 import argparse
 import json
@@ -30,30 +31,18 @@ from metrics import (
 
 try:
     import can
-except ImportError:  # pragma: no cover - dependency is optional at import time
+except ImportError:
     can = None  # type: ignore
 
 try:
     import cantools
     from cantools.database import Database
-except ImportError:  # pragma: no cover
+except ImportError:
     cantools = None  # type: ignore
     Database = None  # type: ignore
 
 
 def load_dbc(dbc_path: str) -> Optional[Database]:
-    """Load a DBC file if available.
-
-    Parameters
-    ----------
-    dbc_path:
-        File system path to the DBC file.
-
-    Returns
-    -------
-    ``cantools.database.Database`` or ``None`` if loading fails.
-    """
-
     if not cantools:
         logging.warning("cantools library not installed; decoding disabled")
         return None
@@ -62,7 +51,7 @@ def load_dbc(dbc_path: str) -> Optional[Database]:
         return cantools.database.load_file(dbc_path)
     except FileNotFoundError:
         logging.warning("DBC file not found: %s", dbc_path)
-    except Exception as exc:  # pragma: no cover - cantools errors
+    except Exception as exc:
         logging.warning("Failed to load DBC: %s", exc)
     return None
 
@@ -76,26 +65,6 @@ def monitor(
     transport: Optional[Transport] = None,
     print_raw: bool = False,
 ) -> None:
-    """Continuously read from the bus and log frames.
-
-    Parameters
-    ----------
-    bus:
-        An open ``can.Bus`` instance.
-    db:
-        Parsed DBC database or ``None`` if decoding is unavailable.
-    logger:
-        Logger used for output.
-    serializer:
-        Optional serialization format used when sending frames through
-        ``transport``.
-    transport:
-        Optional transport used to forward serialized frames.
-    print_raw:
-        If ``True``, each received frame is logged with its raw payload
-        and, when decoding succeeds, the decoded signal values.
-    """
-
     send_queue: queue.Queue[str] | None = None
     if serializer and transport:
         send_queue = queue.Queue(maxsize=1000)
@@ -105,82 +74,77 @@ def monitor(
                 payload = send_queue.get()
                 try:
                     transport.send(payload)
-                except Exception:  # pragma: no cover - network errors
+                except Exception:
                     logger.error("Transport error", exc_info=True)
                 finally:
                     send_queue.task_done()
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    # helper to compare bus-off state without enum error
+    def is_bus_off(b: "can.BusABC") -> bool:
+        try:
+            return getattr(b, "state", None) == can.bus.BusState.BUS_OFF
+        except Exception:
+            return False
+
     try:
         while True:
             msg = bus.recv(timeout=1.0)
             if msg is None:
-                # Avoid busy-looping when no frames are available
-                if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
+                if is_bus_off(bus):
                     record_bus_error()
                     raise can.CanError("Bus-off state detected")
                 time.sleep(0.1)
                 continue
 
-            id_fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
-
+            fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
+            raw = msg.data.hex()
             decoded = None
+
             if db:
                 try:
                     decoded = db.decode_message(
-                        msg.arbitration_id,
-                        msg.data,
-                        decode_choices=True,
+                        msg.arbitration_id, msg.data, decode_choices=True
                     )
                 except KeyError:
                     record_decoding_failure()
-                    logger.debug(
-                        "No DBC entry for id=0x%s", id_fmt % msg.arbitration_id
-                    )
-                except Exception as exc:  # pragma: no cover - depends on DBC
+                    logger.debug("No DBC entry for id=0x%s", fmt % msg.arbitration_id)
+                except Exception as exc:
                     record_decoding_failure()
                     logger.warning(
-                        "Decoding error for id=0x%s: %s",
-                        id_fmt % msg.arbitration_id,
-                        exc,
+                        "Decoding error for id=0x%s: %s", fmt % msg.arbitration_id, exc
                     )
 
             if print_raw:
-                base = f"id=0x{id_fmt % msg.arbitration_id} raw={msg.data.hex()}"
+                line = f"id=0x{fmt%msg.arbitration_id} raw={raw}"
                 if decoded is not None:
-                    base += f" decoded={decoded}"
-                logger.info(base)
+                    line += f" decoded={decoded}"
+                logger.info(line)
             elif decoded is not None:
                 logger.info(
-                    "id=0x%s decoded=%s",
-                    id_fmt % msg.arbitration_id,
-                    decoded,
+                    "id=0x%s decoded=%s", fmt % msg.arbitration_id, decoded
                 )
 
             if send_queue is not None:
                 payload = serialize_frame(
-                    msg.arbitration_id,
-                    msg.data,
-                    decoded,
-                    serializer,  # type: ignore[arg-type]
+                    msg.arbitration_id, msg.data, decoded, serializer  # type: ignore[arg-type]
                 )
                 try:
                     send_queue.put_nowait(payload)
                 except queue.Full:
                     logger.warning("Transport queue full; dropping frame")
 
-            if getattr(bus, "state", None) == can.bus.BusState.BUS_OFF:
+            if is_bus_off(bus):
                 record_bus_error()
                 raise can.CanError("Bus-off state detected")
+
     finally:
         if send_queue is not None:
             send_queue.join()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """Entry point for command-line execution."""
-
     parser = argparse.ArgumentParser(
         description="Monitor a SocketCAN bus and decode messages"
     )
@@ -214,10 +178,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"Failed to load config file: {args.config}")
 
     level_name = args.log_level or config.get("log_level", "INFO")
-    level = getattr(logging, str(level_name).upper(), logging.INFO)
-
+    level = getattr(logging, level_name.upper(), logging.INFO)
     reset_metrics()
-
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s: %(message)s",
@@ -226,11 +188,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             logging.StreamHandler(),
         ],
     )
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(_name_)
 
+    # bring up the CAN interface
     setup_interface(args.interface, args.bitrate, args.listen_only)
 
-    dbc_path = os.path.join(os.path.dirname(__file__), "OBD.dbc")
+    dbc_path = os.path.join(os.path.dirname(_file_), "OBD.dbc")
     db = load_dbc(dbc_path)
 
     if can is None:
@@ -241,12 +204,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     while True:
         try:
             with can.interface.Bus(
-                bustype="socketcan", channel=args.interface, receive_own_messages=False
+                interface="socketcan",
+                channel=args.interface,
+                bitrate=args.bitrate,
+                receive_own_messages=False,
             ) as bus:
                 logger.info("Connected to %s", args.interface)
                 monitor(bus, db, logger, print_raw=args.print_raw)
                 delay = 1.0
-        except can.CanError as exc:  # pragma: no cover - runtime CAN errors
+        except can.CanError as exc:
             record_bus_error()
             logger.error("CAN error: %s. Restarting interface...", exc)
             time.sleep(delay)
@@ -256,7 +222,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             break
-        except Exception as exc:  # pragma: no cover - unexpected
+        except Exception as exc:
             record_bus_error()
             logger.exception("Unexpected error: %s", exc)
             time.sleep(delay)
@@ -267,5 +233,5 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry
+if _name_ == "_main_":
     raise SystemExit(main())
