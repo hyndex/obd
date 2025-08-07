@@ -80,23 +80,45 @@ Additional options:
 - `--log-level DEBUG` – increase verbosity.
 - `--listen-only` – avoid transmitting frames.
 - `--print-raw` – include raw CAN payloads in the log.
-- `--config settings.json` – load options from a JSON file (`log_level`, startup `patches`, etc.).
 
-Example `settings.json`:
+- `--config settings.json` – load options from a JSON file (`log_level`, startup
+  `patches`, etc.).
+
+Example `vcu_security_patch.json`:
 
 ```json
 {
-  "log_level": "DEBUG",
+  "log_level": "INFO",
   "patches": {
+    "vcu_enter_extended_session": {
+      "can_id": 2016,
+      "payload": "02 10 03 00 00 00 00 00",
+      "response_id": 2024,
+      "timeout_ms": 500,
+      "retries": 1
+    },
     "vcu_security_level1": {
       "can_id": 2016,
       "payload": "06 27 01 01 01 00 00 00",
       "response_id": 2024,
       "timeout_ms": 500,
       "retries": 2
+    },
+    "vcu_read_dtc": {
+      "can_id": 2016,
+      "payload": "03 19 02 FF 00 00 00 00",
+      "response_id": 2024,
+      "timeout_ms": 500,
+      "retries": 1
     }
   }
 }
+```
+
+Run the monitor with the patch enabled:
+
+```bash
+python -m can_monitor --interface can0 --bitrate 250000 --config vcu_security_patch.json
 ```
 
 When `--print-raw` is supplied, the log records the raw CAN payload for each

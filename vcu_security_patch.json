@@ -1,0 +1,26 @@
+{
+  "log_level": "INFO",
+  "patches": {
+    "vcu_enter_extended_session": {
+      "can_id": 2016,
+      "payload": "02 10 03 00 00 00 00 00",
+      "response_id": 2024,
+      "timeout_ms": 500,
+      "retries": 1
+    },
+    "vcu_security_level1": {
+      "can_id": 2016,
+      "payload": "06 27 01 01 01 00 00 00",
+      "response_id": 2024,
+      "timeout_ms": 500,
+      "retries": 2
+    },
+    "vcu_read_dtc": {
+      "can_id": 2016,
+      "payload": "03 19 02 FF 00 00 00 00",
+      "response_id": 2024,
+      "timeout_ms": 500,
+      "retries": 1
+    }
+  }
+}
