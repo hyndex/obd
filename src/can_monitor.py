@@ -18,7 +18,7 @@ import time
 import threading
 import queue
 from logging.handlers import RotatingFileHandler
-from typing import Optional
+from typing import Any, Optional
 
 from serialization import serialize_frame
 from transport import Transport
@@ -41,6 +41,24 @@ try:
 except ImportError:
     cantools = None  # type: ignore
     Database = None  # type: ignore
+
+
+def apply_patches(bus: "can.BusABC", patches: dict[str, Any]) -> None:
+    """Send one-shot frames defined in configuration."""
+    for name, p in patches.items():
+        msg = can.Message(
+            arbitration_id=p["can_id"],
+            data=bytes.fromhex(p["payload"]),
+            is_extended_id=False,
+        )
+        for _ in range(p.get("retries", 1)):
+            bus.send(msg, timeout=0.2)
+            rsp = bus.recv(timeout=p.get("timeout_ms", 300) / 1000)
+            if rsp and rsp.arbitration_id == p["response_id"]:
+                logging.info("Patch '%s' applied (got 0x%02X)", name, rsp.data[0])
+                break
+        else:
+            logging.warning("Patch '%s' failed – no response", name)
 
 
 def load_dbc(dbc_path: str) -> Optional[Database]:
@@ -318,6 +336,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 receive_own_messages=False,
             ) as bus:
                 logger.info("Connected to %s", args.interface)
+                if "patches" in config:
+                    apply_patches(bus, config["patches"])
                 if db is None and not fallback_dbs:
                     db, fallback_dbs = load_opendbc_dbs(bus)
                 monitor(

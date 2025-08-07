@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from can_monitor import load_dbc, load_opendbc_dbs, monitor  # noqa: E402
+from can_monitor import load_dbc, load_opendbc_dbs, monitor, apply_patches  # noqa: E402
 from metrics import get_metrics, reset_metrics  # noqa: E402
 
 if not hasattr(can.bus.BusState, "BUS_OFF"):
@@ -264,6 +264,27 @@ def test_monitor_continues_with_slow_transport(log_setup):
 
     assert errors and isinstance(errors[0], can.CanError)
     assert transport.count == 2
+
+
+def test_apply_patches_sends_and_logs(caplog):
+    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    patches = {
+        "demo": {
+            "can_id": 0x123,
+            "payload": "01",
+            "response_id": 0x456,
+            "timeout_ms": 100,
+        }
+    }
+    rsp = can.Message(arbitration_id=0x456, data=b"\x67", is_extended_id=False)
+
+    def fake_recv(timeout=0.1):
+        return rsp
+
+    with caplog.at_level(logging.INFO):
+        with patch.object(bus, "recv", side_effect=fake_recv):
+            apply_patches(bus, patches)
+    assert "Patch 'demo' applied" in caplog.text
 
 
 def test_load_dbc_missing_file(caplog):
