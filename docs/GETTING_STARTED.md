@@ -80,13 +80,22 @@ Additional options:
 - `--log-level DEBUG` – increase verbosity.
 - `--listen-only` – avoid transmitting frames.
 - `--print-raw` – include raw CAN payloads in the log.
-- `--config settings.json` – load options from a JSON file (currently only `log_level`).
+- `--config settings.json` – load options from a JSON file (`log_level`, startup `patches`, etc.).
 
 Example `settings.json`:
 
 ```json
 {
-  "log_level": "DEBUG"
+  "log_level": "DEBUG",
+  "patches": {
+    "vcu_security_level1": {
+      "can_id": 2016,
+      "payload": "06 27 01 01 01 00 00 00",
+      "response_id": 2024,
+      "timeout_ms": 500,
+      "retries": 2
+    }
+  }
 }
 ```
 
