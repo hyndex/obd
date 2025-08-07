@@ -252,7 +252,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         description="Monitor a SocketCAN bus and decode messages"
     )
     parser.add_argument(
-        "--bitrate", type=int, default=500000, help="CAN bitrate in bits per second"
+        "--bitrate", type=int, default=250000, help="CAN bitrate in bits per second"
     )
     parser.add_argument(
         "--interface", default="can0", help="SocketCAN interface to use"
