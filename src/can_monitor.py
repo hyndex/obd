@@ -139,6 +139,102 @@ def load_opendbc_dbs(bus: "can.BusABC") -> tuple[Optional[Database], list[Databa
     return None, fallback_dbs
 
 
+def _convert_to_pcode(code_bytes: bytes) -> str:
+    """Convert three raw DTC bytes to standard Pxxxx style code."""
+    if len(code_bytes) < 2:
+        return "P0000"
+    value = (code_bytes[0] << 8) | code_bytes[1]
+    letter_map = {0: "P", 1: "C", 2: "B", 3: "U"}
+    letter = letter_map.get((value >> 14) & 0x3, "P")
+    digits = value & 0x3FFF
+    return f"{letter}{digits:04X}"
+
+
+def _process_uds_payload(
+    payload: bytes, uds_config: dict[str, Any], logger: logging.Logger
+) -> None:
+    """Parse a complete UDS payload containing DTC information."""
+    if len(payload) < 3:
+        return
+    if payload[0] == 0x59 and payload[1] == 0x02:
+        dtc_count = payload[2]
+        entries = payload[3:]
+        for i in range(dtc_count):
+            start = i * 4
+            if start + 4 > len(entries):
+                break
+            code = _convert_to_pcode(entries[start : start + 3])  # noqa: E203
+            info = uds_config.get("dtcs", {}).get(code)
+            if info:
+                desc = info.get("description", "")
+                severity = info.get("severity", "INFO")
+                component = info.get("component", "Unknown")
+                alert = info.get("alert", False) or severity.upper() == "CRITICAL"
+            else:
+                desc = "Unknown DTC"
+                severity = "UNKNOWN"
+                component = "Unknown"
+                alert = False
+            logger.info(
+                "DTC %s (%s): %s [Severity: %s]",
+                code,
+                component,
+                desc,
+                severity,
+            )
+            if alert:
+                logger.error("*** ALERT: Critical DTC %s detected - %s ***", code, desc)
+
+
+def _handle_uds_frame(
+    bus: "can.BusABC",
+    msg: "can.Message",
+    state: dict[str, Any],
+    ecu_req_id: Optional[int],
+    block_size: int,
+    st_min: int,
+    uds_config: dict[str, Any],
+    logger: logging.Logger,
+) -> bool:
+    """Handle ISO-TP reassembly and DTC processing.
+
+    Returns True if the frame was consumed as part of UDS handling.
+    """
+
+    data = bytes(msg.data)
+    if not data:
+        return True
+    pci = data[0]
+    frame_type = pci >> 4
+    if frame_type == 0x0:  # single frame
+        length = pci & 0xF
+        payload = data[1 : 1 + length]  # noqa: E203
+        _process_uds_payload(payload, uds_config, logger)
+        return True
+    if frame_type == 0x1:  # first frame
+        length = ((pci & 0xF) << 8) | data[1]
+        state["payload"] = bytearray(data[2:])
+        state["expected"] = length - len(state["payload"])
+        if ecu_req_id is not None:
+            fc = can.Message(
+                arbitration_id=ecu_req_id,
+                data=bytes([0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]),
+                is_extended_id=False,
+            )
+            bus.send(fc)
+        return True
+    if frame_type == 0x2 and state.get("expected", 0) > 0:  # consecutive frame
+        take = min(state["expected"], 7)
+        state["payload"].extend(data[1 : 1 + take])  # noqa: E203
+        state["expected"] -= take
+        if state["expected"] <= 0:
+            _process_uds_payload(bytes(state["payload"]), uds_config, logger)
+            state["payload"] = bytearray()
+            state["expected"] = 0
+        return True
+    return False
+
+
 def monitor(
     bus: "can.BusABC",
     db: Optional[Database],
@@ -148,6 +244,7 @@ def monitor(
     transport: Optional[Transport] = None,
     print_raw: bool = False,
     fallback_dbs: Optional[list[Database]] = None,
+    uds_config: Optional[dict[str, Any]] = None,
 ) -> None:
     send_queue: queue.Queue[str] | None = None
     if serializer and transport:
@@ -173,6 +270,17 @@ def monitor(
             return False
 
     missing_ids: set[int] = set()
+
+    ecu_resp_id = None
+    ecu_req_id = None
+    flow_block = 0
+    flow_st = 0
+    uds_state = {"expected": 0, "payload": bytearray()}
+    if uds_config:
+        ecu_resp_id = uds_config.get("ecu_response_id")
+        ecu_req_id = uds_config.get("ecu_request_id")
+        flow_block = uds_config.get("flow_control", {}).get("block_size", 0)
+        flow_st = uds_config.get("flow_control", {}).get("st_min_ms", 0)
     try:
         while True:
             msg = bus.recv(timeout=1.0)
@@ -182,6 +290,19 @@ def monitor(
                     raise can.CanError("Bus-off state detected")
                 time.sleep(0.1)
                 continue
+
+            if uds_config and msg.arbitration_id == ecu_resp_id:
+                if _handle_uds_frame(
+                    bus,
+                    msg,
+                    uds_state,
+                    ecu_req_id,
+                    flow_block,
+                    flow_st,
+                    uds_config,
+                    logger,
+                ):
+                    continue
 
             fmt = "%08X" if getattr(msg, "is_extended_id", False) else "%03X"
             raw = msg.data.hex()
@@ -290,7 +411,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--log-level", help="Logging level (e.g. INFO, DEBUG)")
     args = parser.parse_args(argv)
 
-    config: dict[str, str] = {}
+    config: dict[str, Any] = {}
     if args.config:
         try:
             with open(args.config, "r", encoding="utf-8") as f:
@@ -310,6 +431,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         ],
     )
     logger = logging.getLogger(__name__)
+
+    uds_cfg = config.get("uds")
 
     dbc_path = Path(__file__).with_name("OBD.dbc")
     db = load_dbc(str(dbc_path))
@@ -346,6 +469,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     logger,
                     print_raw=args.print_raw,
                     fallback_dbs=fallback_dbs,
+                    uds_config=uds_cfg,
                 )
                 delay = 1.0
         except can.CanError as exc:

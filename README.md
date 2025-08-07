@@ -78,3 +78,33 @@ python -m blf_decoder PV11-yadwad_0004465_20250102_012231.blf
 
 Pass `--dbc` to supply an alternative DBC file.  Each decoded frame is
 printed as `id`, raw hex payload and the parsed signal dictionary.
+
+## UDS Integration
+
+The CAN monitor can interpret Unified Diagnostic Services (UDS) responses
+when provided with an `uds` section in the JSON configuration passed via
+`--config`.  The section defines CAN IDs for requests and responses,
+diagnostic trouble code (DTC) metadata and ISO-TP flow control options.
+
+```json
+{
+  "uds": {
+    "ecu_request_id": 2016,
+    "ecu_response_id": 2024,
+    "dtcs": {
+      "P162E": {
+        "description": "Air_comp_aux_Power_stack over-temp",
+        "severity": "CRITICAL",
+        "alert": true,
+        "component": "HVAC"
+      }
+    },
+    "flow_control": {"block_size": 0, "st_min_ms": 0}
+  }
+}
+```
+
+Multi-frame UDS responses are reassembled automatically.  When DTC
+information (service `0x19`) is received, entries found in `uds.dtcs`
+are logged with their description and severity, and any critical codes
+emit an alert in the log output.

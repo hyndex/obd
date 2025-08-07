@@ -267,7 +267,9 @@ def test_monitor_continues_with_slow_transport(log_setup):
 
 
 def test_apply_patches_sends_and_logs(caplog):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     patches = {
         "demo": {
             "can_id": 0x123,
@@ -373,3 +375,65 @@ def test_opendbc_fallback_selects_best_dbc(tmp_path):
     assert fallbacks == []
     assert db is not None
     assert db.get_message_by_frame_id(0x100)
+
+
+def test_uds_dtc_alert(log_setup):
+    logger, log_file = log_setup
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+
+    uds_cfg = {
+        "ecu_request_id": 0x7E0,
+        "ecu_response_id": 0x7E8,
+        "dtcs": {
+            "P058D": {
+                "description": "Dual_Aux_Com_fail",
+                "severity": "WARNING",
+                "alert": False,
+                "component": "Auxiliary HV",
+            },
+            "P162E": {
+                "description": "Air_comp_aux_Power_stack over-temp",
+                "severity": "CRITICAL",
+                "alert": True,
+                "component": "HVAC",
+            },
+        },
+        "flow_control": {"block_size": 0, "st_min_ms": 0},
+    }
+
+    first = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0B, 0x59, 0x02, 0x02, 0x16, 0x2E, 0x00]),
+        is_extended_id=False,
+    )
+    second = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 0x40, 0x05, 0x8D, 0x00, 0x40, 0x00, 0x00]),
+        is_extended_id=False,
+    )
+    frames = [first, second]
+
+    def fake_recv(timeout=1.0):
+        if frames:
+            return frames.pop(0)
+        raise can.CanError("stop")
+
+    sent: list[can.Message] = []
+
+    def fake_send(msg, timeout=None):  # pragma: no cover - simple capture
+        sent.append(msg)
+
+    with pytest.raises(can.CanError):
+        with patch.object(bus, "recv", side_effect=fake_recv), patch.object(
+            bus, "send", side_effect=fake_send
+        ):
+            monitor(bus, None, logger, uds_config=uds_cfg)
+
+    contents = log_file.read_text()
+    assert "DTC P162E" in contents
+    assert "*** ALERT: Critical DTC P162E detected" in contents
+    assert "DTC P058D" in contents
+    assert "*** ALERT: Critical DTC P058D" not in contents
+    assert any(m.arbitration_id == 0x7E0 and m.data[0] == 0x30 for m in sent)
