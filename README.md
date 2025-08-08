@@ -92,11 +92,11 @@ diagnostic trouble code (DTC) metadata and ISO-TP flow control options.
     "ecu_request_id": 2016,
     "ecu_response_id": 2024,
     "dtcs": {
-      "P162E": {
-        "description": "Air_comp_aux_Power_stack over-temp",
+      "P20F9": {
+        "description": "Power stack motor over-temperature (>100°C)",
         "severity": "CRITICAL",
         "alert": true,
-        "component": "HVAC"
+        "component": "PS"
       }
     },
     "flow_control": {"block_size": 0, "st_min_ms": 0}
@@ -108,3 +108,5 @@ Multi-frame UDS responses are reassembled automatically.  When DTC
 information (service `0x19`) is received, entries found in `uds.dtcs`
 are logged with their description and severity, and any critical codes
 emit an alert in the log output.
+
+A sample configuration is bundled as `uds_config.json` for quick access.

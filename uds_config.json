@@ -1,0 +1,159 @@
+{
+  "uds": {
+    "ecu_request_id": 2016,
+    "ecu_response_id": 2024,
+    "flow_control": { "block_size": 0, "st_min_ms": 0 },
+    "dtcs": {
+      "P058D": {
+        "description": "Dual Aux communication failure",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AUX"
+      },
+      "P061D": {
+        "description": "Dual Aux pre-charge fault (Contactor=1 but Aux DC link < 200V)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AUX"
+      },
+      "P1010": {
+        "description": "Dual Aux device internal over-temperature (>65°C)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AUX"
+      },
+      "P1011": {
+        "description": "Pressure sensor 1 open (reading ~12)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P161D": {
+        "description": "Pressure sensor 2 open (reading ~12)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P162E": {
+        "description": "Air compressor Aux power stack over-temperature (>65°C)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AUX"
+      },
+      "P1BA4": {
+        "description": "Air compressor motor over-temperature (>100°C)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AIR_COMP"
+      },
+      "P1BA5": {
+        "description": "Air compressor over-current (>5A for >30s) or Aux reports fault",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AIR_COMP"
+      },
+      "P20F5": {
+        "description": "Air compressor voltage build fault (does not reach ~400V within expected time)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "AIR_COMP"
+      },
+      "P20F6": {
+        "description": "PS Aux power stack over-temperature (>65°C)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "PS"
+      },
+      "P20F9": {
+        "description": "Power stack motor over-temperature (>100°C)",
+        "severity": "CRITICAL",
+        "alert": true,
+        "component": "PS"
+      },
+      "P20FA": {
+        "description": "Power stack over-current (>5A for >30s) or Aux reports fault",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "PS"
+      },
+      "P2114": {
+        "description": "Power stack voltage build fault (does not reach ~400V within expected time)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "PS"
+      },
+      "P2115": {
+        "description": "Air compressor fault (Aux signaled)",
+        "severity": "CRITICAL",
+        "alert": true,
+        "component": "AIR_COMP"
+      },
+      "P2116": {
+        "description": "PS motor/inverter fault (Aux signaled)",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "PS"
+      },
+      "P2117": {
+        "description": "Reserved/unspecified fault",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "GENERAL"
+      },
+      "P2146": {
+        "description": "Reserved/unspecified fault",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "GENERAL"
+      },
+      "P21E5": {
+        "description": "Reserved/unspecified fault",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "GENERAL"
+      },
+      "P0071": {
+        "description": "Ambient air temperature sensor range/performance",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P0072": {
+        "description": "Ambient air temperature sensor circuit low",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P0073": {
+        "description": "Ambient air temperature sensor circuit high",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P0074": {
+        "description": "Ambient air temperature sensor circuit intermittent",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P0075": {
+        "description": "Intake valve control solenoid (A) circuit",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "ACTUATORS"
+      },
+      "P007C": {
+        "description": "Charge air cooler temperature sensor circuit low",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      },
+      "P007D": {
+        "description": "Charge air cooler temperature sensor circuit high",
+        "severity": "MAJOR",
+        "alert": false,
+        "component": "SENSORS"
+      }
+    }
+  }
+}
