@@ -76,5 +76,7 @@ def test_session_and_security(monkeypatch):
     monkeypatch.setattr(bus, "recv", fake_recv)
 
     assert client.change_session(3)
-    assert client.security_access(1, b"\x00\x00")
+    assert client.security_access(1)
     assert len(sent) == 3
+    # verify key derived from seed AA BB -> 55 44 (bitwise inversion)
+    assert sent[2].data[:5] == bytes([0x04, 0x27, 0x02, 0x55, 0x44])

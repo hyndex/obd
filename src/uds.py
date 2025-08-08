@@ -23,7 +23,27 @@ def _calc_st_delay(byte: int) -> float:
 
 
 class UDSClient:
-    """Minimal UDS client implementing ISO-TP segmentation."""
+    """Minimal UDS client implementing ISO-TP segmentation.
+
+    Parameters
+    ----------
+    bus: can.BusABC
+        Underlying CAN bus implementation.
+    req_id: int
+        Arbitration ID used for requests sent to the ECU.
+    resp_id: int
+        Expected arbitration ID of ECU responses.
+    is_extended_id: bool, optional
+        Use 29-bit identifiers instead of 11-bit.  Default ``False``.
+    rx_block_size: int, optional
+        Block size to advertise when reassembling multi-frame responses.
+    rx_st_min: int, optional
+        Minimum separation time in milliseconds to advertise in flow
+        control frames.
+    key_algo: callable, optional
+        Function applied to the received seed to generate the security
+        access key.  When not provided a simple bitwise inversion is used.
+    """
 
     def __init__(
         self,
@@ -34,6 +54,7 @@ class UDSClient:
         is_extended_id: bool = False,
         rx_block_size: int = 0,
         rx_st_min: int = 0,
+        key_algo: "Callable[[bytes], bytes] | None" = None,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -41,6 +62,7 @@ class UDSClient:
         self.is_extended_id = is_extended_id
         self.rx_block_size = rx_block_size
         self.rx_st_min = rx_st_min
+        self._key_algo = key_algo
 
     # ------------------------------------------------------------------
     # sending
@@ -197,11 +219,33 @@ class UDSClient:
         rsp = self.request(0x10, bytes([session]), timeout)
         return rsp[:2] == bytes([0x50, session])
 
-    def security_access(self, level: int, key: bytes, timeout: float = 1.0) -> bool:
+    def _default_key_algo(self, seed: bytes) -> bytes:
+        """Generate a key from a seed using a basic bitwise inversion.
+
+        This simple algorithm flips all bits of the seed.  Real-world ECUs
+        use proprietary algorithms; this serves as a deterministic example
+        for testing and demonstration purposes.
+        """
+
+        return bytes((b ^ 0xFF) & 0xFF for b in seed)
+
+    def security_access(
+        self, level: int, key: "bytes | None" = None, timeout: float = 1.0
+    ) -> bool:
+        """Request security access at ``level``.
+
+        If ``key`` is ``None`` the key is derived from the ECU-provided seed
+        using ``key_algo`` passed at construction time or a default
+        inversion-based algorithm.
+        """
+
         rsp = self.request(0x27, bytes([level * 2 - 1]), timeout)
         if not rsp or rsp[0] != 0x67:
             return False
-        _seed = rsp[2:]
+        seed = rsp[2:]
+        if key is None:
+            algo = self._key_algo or self._default_key_algo
+            key = algo(seed)
         rsp2 = self.request(0x27, bytes([level * 2]) + key, timeout)
         return rsp2[:2] == bytes([0x67, level * 2])
 
