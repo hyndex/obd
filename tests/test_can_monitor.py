@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -383,29 +384,12 @@ def test_uds_dtc_alert(log_setup):
         bustype="virtual", bitrate=500000, receive_own_messages=True
     )
 
-    uds_cfg = {
-        "ecu_request_id": 0x7E0,
-        "ecu_response_id": 0x7E8,
-        "dtcs": {
-            "P058D": {
-                "description": "Dual_Aux_Com_fail",
-                "severity": "WARNING",
-                "alert": False,
-                "component": "Auxiliary HV",
-            },
-            "P162E": {
-                "description": "Air_comp_aux_Power_stack over-temp",
-                "severity": "CRITICAL",
-                "alert": True,
-                "component": "HVAC",
-            },
-        },
-        "flow_control": {"block_size": 0, "st_min_ms": 0},
-    }
+    with open(Path(__file__).resolve().parents[1] / "uds_config.json") as f:
+        uds_cfg = json.load(f)["uds"]
 
     first = can.Message(
         arbitration_id=0x7E8,
-        data=bytes([0x10, 0x0B, 0x59, 0x02, 0x02, 0x16, 0x2E, 0x00]),
+        data=bytes([0x10, 0x0B, 0x59, 0x02, 0x02, 0x20, 0xF9, 0x00]),
         is_extended_id=False,
     )
     second = can.Message(
@@ -432,8 +416,8 @@ def test_uds_dtc_alert(log_setup):
             monitor(bus, None, logger, uds_config=uds_cfg)
 
     contents = log_file.read_text()
-    assert "DTC P162E" in contents
-    assert "*** ALERT: Critical DTC P162E detected" in contents
+    assert "DTC P20F9" in contents
+    assert "*** ALERT: Critical DTC P20F9 detected" in contents
     assert "DTC P058D" in contents
     assert "*** ALERT: Critical DTC P058D" not in contents
     assert any(m.arbitration_id == 0x7E0 and m.data[0] == 0x30 for m in sent)

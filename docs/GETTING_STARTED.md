@@ -115,6 +115,9 @@ Example `vcu_security_patch.json`:
 }
 ```
 
+A sample UDS configuration is provided in `uds_config.json` and can be passed
+with `--config` to enable diagnostic trouble code decoding.
+
 Run the monitor with the patch enabled:
 
 ```bash
