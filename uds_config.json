@@ -2,7 +2,10 @@
   "uds": {
     "ecu_request_id": 2016,
     "ecu_response_id": 2024,
-    "flow_control": { "block_size": 0, "st_min_ms": 0 },
+    "is_extended_id": false,
+    "session": 3,
+    "security": { "level": 1, "key": null },
+    "flow_control": { "block_size": 1, "st_min_ms": 1 },
     "dtcs": {
       "P058D": {
         "description": "Dual Aux communication failure",
