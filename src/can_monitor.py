@@ -29,6 +29,7 @@ from metrics import (
     record_restart,
     reset_metrics,
 )
+from uds import UDSClient
 
 try:
     import can
@@ -517,6 +518,39 @@ def main(argv: Optional[list[str]] = None) -> int:
                 logger.info("Connected to %s", args.interface)
                 if "patches" in config:
                     apply_patches(bus, config["patches"])
+                if uds_cfg:
+                    try:
+                        client = UDSClient(
+                            bus,
+                            uds_cfg["ecu_request_id"],
+                            uds_cfg["ecu_response_id"],
+                            is_extended_id=uds_cfg.get("is_extended_id", False),
+                            rx_block_size=uds_cfg.get("flow_control", {})
+                            .get("block_size", 0),
+                            rx_st_min=uds_cfg.get("flow_control", {})
+                            .get("st_min_ms", 0),
+                        )
+                        sess = uds_cfg.get("session")
+                        if sess is not None:
+                            if client.change_session(sess):
+                                logger.info("UDS session %s established", sess)
+                            else:
+                                logger.warning("UDS session %s request failed", sess)
+                        sec_cfg = uds_cfg.get("security") or {}
+                        level = sec_cfg.get("level")
+                        if level:
+                            key_hex = sec_cfg.get("key")
+                            key = bytes.fromhex(key_hex) if isinstance(key_hex, str) else None
+                            if client.security_access(level, key):
+                                logger.info(
+                                    "UDS security level %s unlocked", level
+                                )
+                            else:
+                                logger.warning(
+                                    "UDS security level %s denied", level
+                                )
+                    except Exception as exc:  # pragma: no cover - best effort
+                        logger.warning("UDS initialisation failed: %s", exc)
                 if db is None and not fallback_dbs:
                     db, fallback_dbs = load_opendbc_dbs(bus)
                 monitor(
