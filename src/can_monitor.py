@@ -154,6 +154,35 @@ def _process_uds_payload(
     payload: bytes, uds_config: dict[str, Any], logger: logging.Logger
 ) -> None:
     """Parse a complete UDS payload containing DTC information."""
+    if not payload:
+        return
+    # negative response handling
+    if payload[0] == 0x7F and len(payload) >= 3:
+        orig_sid = payload[1]
+        nrc = payload[2]
+        nrc_map = {
+            0x10: "General Reject",
+            0x11: "Service Not Supported",
+            0x12: "Sub-function Not Supported",
+            0x13: "Incorrect Length or Format",
+            0x22: "Conditions Not Correct",
+            0x31: "Request Out Of Range",
+            0x33: "Security Access Denied",
+            0x35: "Invalid Key",
+            0x36: "Exceeded Number of Attempts",
+            0x37: "Time Delay Not Expired",
+            0x7E: "Sub-function Not Supported In Active Session",
+            0x78: "Response Pending",
+        }
+        desc = nrc_map.get(nrc, "Unknown NRC")
+        logger.warning(
+            "UDS Negative Response: Service 0x%02X, NRC 0x%02X (%s)",
+            orig_sid,
+            nrc,
+            desc,
+        )
+        return
+
     if len(payload) < 3:
         return
     if payload[0] == 0x59 and payload[1] == 0x02:
@@ -206,6 +235,12 @@ def _handle_uds_frame(
         return True
     pci = data[0]
     frame_type = pci >> 4
+    # interleaved new message
+    if frame_type in (0x0, 0x1) and state.get("expected", 0) > 0:
+        state["payload"] = bytearray()
+        state["expected"] = 0
+        state.pop("next_seq", None)
+        state.pop("bs_count", None)
     if frame_type == 0x0:  # single frame
         length = pci & 0xF
         payload = data[1 : 1 + length]  # noqa: E203
@@ -215,6 +250,8 @@ def _handle_uds_frame(
         length = ((pci & 0xF) << 8) | data[1]
         state["payload"] = bytearray(data[2:])
         state["expected"] = length - len(state["payload"])
+        state["next_seq"] = 1
+        state["bs_count"] = 0
         if ecu_req_id is not None:
             fc = can.Message(
                 arbitration_id=ecu_req_id,
@@ -224,13 +261,32 @@ def _handle_uds_frame(
             bus.send(fc)
         return True
     if frame_type == 0x2 and state.get("expected", 0) > 0:  # consecutive frame
+        seq = pci & 0x0F
+        if seq != state.get("next_seq"):
+            logger.warning("Unexpected CF sequence: got %d expected %d", seq, state.get("next_seq"))
+            state["payload"] = bytearray()
+            state["expected"] = 0
+            return True
         take = min(state["expected"], 7)
         state["payload"].extend(data[1 : 1 + take])  # noqa: E203
         state["expected"] -= take
+        state["next_seq"] = (state["next_seq"] + 1) & 0x0F
+        state["bs_count"] = state.get("bs_count", 0) + 1
         if state["expected"] <= 0:
             _process_uds_payload(bytes(state["payload"]), uds_config, logger)
             state["payload"] = bytearray()
             state["expected"] = 0
+            state.pop("next_seq", None)
+            state.pop("bs_count", None)
+        elif block_size > 0 and state["bs_count"] >= block_size:
+            if ecu_req_id is not None:
+                fc = can.Message(
+                    arbitration_id=ecu_req_id,
+                    data=bytes([0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]),
+                    is_extended_id=False,
+                )
+                bus.send(fc)
+            state["bs_count"] = 0
         return True
     return False
 
