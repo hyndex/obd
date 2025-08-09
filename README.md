@@ -110,3 +110,8 @@ are logged with their description and severity, and any critical codes
 emit an alert in the log output.
 
 A sample configuration is bundled as `uds_config.json` for quick access.
+
+The low level ``UDSClient`` helper used by the monitor also exposes a
+configurable timeout.  The ``timeout`` argument of ``send`` and ``request`` may
+be either a single float or a ``(N_Bs, N_Cr)`` tuple to independently limit how
+long the client waits for Flow Control frames and for response data.
