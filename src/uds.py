@@ -1,8 +1,16 @@
-"""UDS client with ISO-TP transport support."""
+"""UDS client with ISO-TP transport support.
+
+Note
+----
+The :class:`UDSClient` is **not** thread-safe. Concurrent calls to its
+messaging methods must be serialized externally or they will raise a
+``RuntimeError`` when a lock is in use.
+"""
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Callable
 
@@ -31,6 +39,10 @@ def _calc_st_delay(byte: int) -> float:
 
 class UDSClient:
     """Minimal UDS client implementing ISO-TP segmentation.
+
+    The client is not thread-safe; calls to :meth:`send`, :meth:`receive`, and
+    :meth:`request` are serialized via an internal :class:`threading.Lock` and
+    will raise :class:`RuntimeError` if invoked concurrently.
 
     Parameters
     ----------
@@ -108,6 +120,7 @@ class UDSClient:
         self.error_on_reset = error_on_reset
         self.logger = logger
         self._rx_fc_status = 0
+        self._lock = threading.Lock()
 
         if self.source_address is not None and self.target_address is not None:
             base = 0x18DA
@@ -121,24 +134,9 @@ class UDSClient:
 
     # ------------------------------------------------------------------
     # sending
-    def send(
+    def _send(
         self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
     ) -> bool:
-        """Send a UDS request segmented over ISO-TP.
-
-        Parameters
-        ----------
-        service: int
-            Service identifier.
-        data: bytes
-            Service payload.
-        timeout: float or tuple(float, float), optional
-            When a single float is provided it limits both the cumulative time
-            spent waiting for Flow Control frames (``N_Bs``) and the timeout for
-            individual CAN send operations.  A two-element tuple allows
-            separate configuration of the Flow Control wait (``N_Bs``) and
-            Consecutive Frame timeout (``N_Cr``).  Default ``1.0`` seconds.
-        """
         payload = bytes([service]) + data
         if len(payload) > 0xFFF:
             self.logger.debug("Payload too large: %d bytes", len(payload))
@@ -354,7 +352,7 @@ class UDSClient:
         self._rx_fc_status = 0
         self._send_fc(status=0)
 
-    def receive(self, timeout: float = 1.0) -> bytes:
+    def _receive(self, timeout: float = 1.0) -> bytes:
         state: dict[str, any] = {
             "expected": 0,
             "payload": bytearray(),
@@ -461,31 +459,66 @@ class UDSClient:
                 continue
 
     # ------------------------------------------------------------------
-    def request(
+    def _request(
         self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
     ) -> bytes:
-        """Send a request and wait for the response.
-
-        Parameters
-        ----------
-        service: int
-            Service identifier.
-        data: bytes
-            Service payload.
-        timeout: float or tuple(float, float), optional
-            Single value applies to both the send phase (``N_Bs``) and the
-            response wait (``N_Cr``).  Supplying a two-element tuple allows
-            configuring these separately as ``(N_Bs, N_Cr)``.  Default ``1.0``
-            seconds.
-        """
         if self.t_data and self.t_data.req:
             self.t_data.req(service, data)
         if isinstance(timeout, tuple):
             send_to, recv_to = timeout
         else:
             send_to = recv_to = timeout
-        self.send(service, data, send_to)
-        return self.receive(recv_to)
+        self._send(service, data, send_to)
+        return self._receive(recv_to)
+
+    def send(
+        self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
+    ) -> bool:
+        """Send a UDS request segmented over ISO-TP.
+
+        Raises
+        ------
+        RuntimeError
+            If another operation is already in progress.
+        """
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("UDSClient operation already in progress")
+        try:
+            return self._send(service, data, timeout)
+        finally:
+            self._lock.release()
+
+    def receive(self, timeout: float = 1.0) -> bytes:
+        """Wait for a UDS response segmented over ISO-TP.
+
+        Raises
+        ------
+        RuntimeError
+            If another operation is already in progress.
+        """
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("UDSClient operation already in progress")
+        try:
+            return self._receive(timeout)
+        finally:
+            self._lock.release()
+
+    def request(
+        self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
+    ) -> bytes:
+        """Send a request and wait for the response atomically.
+
+        Raises
+        ------
+        RuntimeError
+            If another operation is already in progress.
+        """
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("UDSClient operation already in progress")
+        try:
+            return self._request(service, data, timeout)
+        finally:
+            self._lock.release()
 
     # high-level services ------------------------------------------------
     def change_session(self, session: int, timeout: float = 1.0) -> bool:

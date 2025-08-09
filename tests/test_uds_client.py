@@ -1,5 +1,7 @@
 import time
 import logging
+import threading
+import queue
 import can
 import pytest
 
@@ -460,3 +462,55 @@ def test_logging_debug(monkeypatch, caplog):
 
     assert any("Sent Single Frame" in r.message for r in caplog.records)
     assert any("Received Single Frame" in r.message for r in caplog.records)
+
+
+def test_request_thread_locking(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    resp = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x02, 0x50, 0x03, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+
+    responses: queue.Queue = queue.Queue()
+    responses.put(resp)
+    responses.put(resp)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.get_nowait())
+
+    results: list[bytes] = []
+
+    def worker() -> None:
+        results.append(client.request(0x10, b"\x03"))
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    t1.join()
+    t2.start()
+    t2.join()
+
+    assert results == [bytes([0x50, 0x03]), bytes([0x50, 0x03])]
+
+    block = threading.Event()
+    release = threading.Event()
+
+    def blocking_send(msg, timeout=None):
+        block.set()
+        release.wait()
+
+    monkeypatch.setattr(bus, "send", blocking_send)
+    monkeypatch.setattr(bus, "recv", lambda timeout: resp)
+
+    t = threading.Thread(target=lambda: client.request(0x10, b"\x03"))
+    t.start()
+    block.wait()
+    with pytest.raises(RuntimeError):
+        client.request(0x10, b"\x03")
+    release.set()
+    t.join()
