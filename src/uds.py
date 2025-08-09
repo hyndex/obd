@@ -104,8 +104,29 @@ class UDSClient:
 
     # ------------------------------------------------------------------
     # sending
-    def send(self, service: int, data: bytes, timeout: float = 1.0) -> bool:
+    def send(
+        self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
+    ) -> bool:
+        """Send a UDS request segmented over ISO-TP.
+
+        Parameters
+        ----------
+        service: int
+            Service identifier.
+        data: bytes
+            Service payload.
+        timeout: float or tuple(float, float), optional
+            When a single float is provided it limits both the cumulative time
+            spent waiting for Flow Control frames (``N_Bs``) and the timeout for
+            individual CAN send operations.  A two-element tuple allows
+            separate configuration of the Flow Control wait (``N_Bs``) and
+            Consecutive Frame timeout (``N_Cr``).  Default ``1.0`` seconds.
+        """
         payload = bytes([service]) + data
+        if isinstance(timeout, tuple):
+            fc_timeout, send_timeout = timeout
+        else:
+            fc_timeout = send_timeout = timeout
         single_limit = 7 if self.address_extension is None else 6
         try:
             if len(payload) <= single_limit:
@@ -125,7 +146,7 @@ class UDSClient:
                     is_extended_id=self.is_extended_id,
                     data=frame_data,
                 )
-                self.bus.send(frame, timeout=timeout)
+                self.bus.send(frame, timeout=send_timeout)
                 if self.t_data and self.t_data.con:
                     self.t_data.con(True, None)
                 return True
@@ -152,15 +173,17 @@ class UDSClient:
                 is_extended_id=self.is_extended_id,
                 data=ff_data,
             )
-            self.bus.send(ff, timeout=timeout)
+            self.bus.send(ff, timeout=send_timeout)
 
             # wait for flow control
-            start = time.monotonic()
+            elapsed = 0.0
             while True:
-                remaining = timeout - (time.monotonic() - start)
+                remaining = fc_timeout - elapsed
                 if remaining <= 0:
                     raise ISOTransportError("No Flow Control frame received")
+                wait_start = time.monotonic()
                 fc = self.bus.recv(remaining)
+                elapsed += time.monotonic() - wait_start
                 if not fc or fc.arbitration_id != self.resp_id:
                     continue
                 data_fc = bytes(fc.data)
@@ -185,12 +208,13 @@ class UDSClient:
             while offset < len(payload):
                 if block_size != 0 and sent_in_block >= block_size:
                     # need next flow control
-                    start = time.monotonic()
                     while True:
-                        remaining = timeout - (time.monotonic() - start)
+                        remaining = fc_timeout - elapsed
                         if remaining <= 0:
                             raise ISOTransportError("Flow control timeout")
+                        wait_start = time.monotonic()
                         fc = self.bus.recv(remaining)
+                        elapsed += time.monotonic() - wait_start
                         if not fc or fc.arbitration_id != self.resp_id:
                             continue
                         data_fc = bytes(fc.data)
@@ -226,7 +250,7 @@ class UDSClient:
                     is_extended_id=self.is_extended_id,
                     data=cf_data,
                 )
-                self.bus.send(cf, timeout=timeout)
+                self.bus.send(cf, timeout=send_timeout)
                 offset += len(chunk)
                 seq = (seq + 1) & 0x0F
                 sent_in_block += 1
@@ -347,11 +371,31 @@ class UDSClient:
             state["payload"] = bytearray()
 
     # ------------------------------------------------------------------
-    def request(self, service: int, data: bytes, timeout: float = 1.0) -> bytes:
+    def request(
+        self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
+    ) -> bytes:
+        """Send a request and wait for the response.
+
+        Parameters
+        ----------
+        service: int
+            Service identifier.
+        data: bytes
+            Service payload.
+        timeout: float or tuple(float, float), optional
+            Single value applies to both the send phase (``N_Bs``) and the
+            response wait (``N_Cr``).  Supplying a two-element tuple allows
+            configuring these separately as ``(N_Bs, N_Cr)``.  Default ``1.0``
+            seconds.
+        """
         if self.t_data and self.t_data.req:
             self.t_data.req(service, data)
-        self.send(service, data, timeout)
-        return self.receive(timeout)
+        if isinstance(timeout, tuple):
+            send_to, recv_to = timeout
+        else:
+            send_to = recv_to = timeout
+        self.send(service, data, send_to)
+        return self.receive(recv_to)
 
     # high-level services ------------------------------------------------
     def change_session(self, session: int, timeout: float = 1.0) -> bool:

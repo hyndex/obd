@@ -50,6 +50,46 @@ def test_send_segments_respects_flow_control(monkeypatch):
     assert sleeps and pytest.approx(sleeps[0], rel=0.1) == 0.001
 
 
+def test_send_cumulative_fc_timeout(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    fc = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x30, 1, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    events = [(0.6, fc), (0.6, fc)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout: float):
+        if not events:
+            now[0] += timeout
+            return None
+        delay, msg = events[0]
+        if delay > timeout:
+            now[0] += timeout
+            events[0] = (delay - timeout, msg)
+            return None
+        now[0] += delay
+        events.pop(0)
+        return msg
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    data = bytes(range(14))
+    with pytest.raises(ISOTransportError, match="Flow control timeout"):
+        client.send(0x22, data, timeout=1.0)
+
+
 def test_session_and_security(monkeypatch):
     bus = can.interface.Bus(
         bustype="virtual", bitrate=500000, receive_own_messages=True
@@ -270,3 +310,47 @@ def test_receive_overflow(monkeypatch):
 
     fc_frames = [m for m in sent if (m.data[0] >> 4) == 0x3]
     assert fc_frames and fc_frames[0].data[0] == 0x32
+
+
+def test_request_tuple_timeouts(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0x59, 0x02, 0x00, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    events = [(0.0, ff), (0.2, cf)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout: float):
+        if not events:
+            now[0] += timeout
+            return None
+        delay, msg = events[0]
+        if delay > timeout:
+            now[0] += timeout
+            events[0] = (delay - timeout, msg)
+            return None
+        now[0] += delay
+        events.pop(0)
+        return msg
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    with pytest.raises(ISOTransportError, match="UDS response timeout"):
+        client.request(0x22, b"\x01", timeout=(1.0, 0.1))
