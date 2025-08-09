@@ -161,3 +161,67 @@ def test_tdata_primitives(monkeypatch):
         ("som_ind",),
         ("ind", bytes(range(10))),
     ]
+
+
+def test_read_dtc_multiframe(monkeypatch):
+    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x14, 0x59, 0x02, 0x20, 0x21, 0x22, 0x23]),
+        is_extended_id=False,
+    )
+    cf1 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A]),
+        is_extended_id=False,
+    )
+    cf2 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x22, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31]),
+        is_extended_id=False,
+    )
+    responses = [ff, cf1, cf2]
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0))
+
+    payload = client.read_dtc_by_status_mask()
+
+    expected = bytes([0x59, 0x02] + list(range(0x20, 0x32)))
+    assert payload == expected
+    # request frame + flow control in response handling
+    assert any(msg.data[0] >> 4 == 0x3 for msg in sent)
+
+
+def test_send_wait_flow_control(monkeypatch):
+    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    fc_wait = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x31, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    fc_cts = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x30, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    fcs = [fc_wait, fc_cts]
+
+    def fake_recv(timeout):
+        return fcs.pop(0)
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    data = bytes(range(14))
+    client.send(0x22, data)
+
+    assert len(sent) == 3
+    assert not fcs
