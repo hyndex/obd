@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Callable
 
@@ -60,6 +61,12 @@ class UDSClient:
     max_rx_size: int, optional
         Maximum number of bytes allowed when reassembling multi-frame
         responses.  When ``None`` no limit is enforced.
+    on_reset: callable, optional
+        Function invoked when reception is reset due to an unexpected
+        start-of-frame.
+    error_on_reset: bool, optional
+        When ``True``, an :class:`ISOTransportError` is raised instead of
+        logging a warning when a reset occurs.
     """
 
     def __init__(
@@ -77,6 +84,8 @@ class UDSClient:
         address_extension: "int | None" = None,
         t_data: "TDataPrimitive | None" = None,
         max_rx_size: "int | None" = None,
+        on_reset: "Callable[[], None] | None" = None,
+        error_on_reset: bool = False,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -90,6 +99,8 @@ class UDSClient:
         self.address_extension = address_extension
         self.t_data = t_data
         self.max_rx_size = max_rx_size
+        self.on_reset = on_reset
+        self.error_on_reset = error_on_reset
         self._rx_fc_status = 0
 
         if self.source_address is not None and self.target_address is not None:
@@ -323,6 +334,18 @@ class UDSClient:
                     continue
                 data = data[1:]
             frame_type = data[0] >> 4
+            if state["expected"] > 0 and frame_type in (0x0, 0x1):
+                state["expected"] = 0
+                state["payload"] = bytearray()
+                if self.on_reset:
+                    self.on_reset()
+                if self.error_on_reset:
+                    raise ISOTransportError(
+                        "Unexpected start-of-frame during reception"
+                    )
+                logging.warning(
+                    "ISO-TP reception reset due to unexpected start-of-frame"
+                )
             if frame_type == 0x0:  # single
                 length = data[0] & 0x0F
                 payload = data[1 : 1 + length]  # noqa: E203
@@ -366,9 +389,19 @@ class UDSClient:
                     self._send_fc(status=self._rx_fc_status)
                     state["bs"] = 0
                 continue
-            # new SF/FF while in progress -> reset
-            state["expected"] = 0
-            state["payload"] = bytearray()
+            if state["expected"] > 0:
+                state["expected"] = 0
+                state["payload"] = bytearray()
+                if self.on_reset:
+                    self.on_reset()
+                if self.error_on_reset:
+                    raise ISOTransportError(
+                        "Unexpected start-of-frame during reception"
+                    )
+                logging.warning(
+                    "ISO-TP reception reset due to unexpected start-of-frame"
+                )
+                continue
 
     # ------------------------------------------------------------------
     def request(
