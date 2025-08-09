@@ -131,3 +131,60 @@ client = UDSClient(bus, 0x7E0, 0x7E8, logger=log)
 
 Key events like frame segmentation, Flow Control waits and errors are logged at
 the ``DEBUG`` level.
+
+### Advanced Options
+
+#### Configuration and Timeouts
+
+- ``max_rx_size`` limits the number of bytes reassembled for a multi-frame
+  response.  Responses exceeding this size raise an ``ISOTransportError``.
+- The ``timeout`` argument of :meth:`send`, :meth:`receive`, and
+  :meth:`request` accepts either a single float or a ``(flow_control,
+  response)`` tuple.  The first element (``N_Bs``) bounds how long the client
+  waits for a Flow Control frame after transmitting a First Frame.  The second
+  element (``N_Cr``) limits the wait for each consecutive response frame.
+- Flow Control frames with status **WAIT** pause transmission but do not reset
+  ``N_Bs``.  If the timeout expires while waiting, ``ISOTransportError`` is
+  raised.  A status of **Overflow** triggers the same error immediately.
+
+#### Thread Safety
+
+``UDSClient`` serializes calls using an internal ``threading.Lock`` and is not
+safe for concurrent use.  Invoking ``send``, ``receive`` or ``request`` from
+multiple threads at the same time raises ``RuntimeError``.  External
+serialization is required when sharing a client instance.
+
+#### Extended Addressing
+
+Normal-fixed, mixed and extended addressing modes are supported:
+
+- Supplying ``source_address`` and ``target_address`` automatically derives
+  29-bit identifiers using the ISO-TP normal-fixed scheme.
+- ``address_extension`` prepends an additional address byte for extended or
+  mixed addressing.
+
+#### Flow Control Tuning
+
+The block size and minimum separation time advertised in Flow Control frames can
+be adjusted to trade throughput for bus load or apply throttling.
+
+```python
+# Maximise throughput
+client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=0, rx_st_min=0)
+
+# Throttle to one frame at a time with 20 ms between frames
+client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=1, rx_st_min=20)
+
+# Protect against oversized responses
+client = UDSClient(bus, 0x7E0, 0x7E8, max_rx_size=1024)
+```
+
+Equivalent settings may be supplied in the JSON configuration:
+
+```json
+"uds": {
+  "ecu_request_id": 2016,
+  "ecu_response_id": 2024,
+  "flow_control": {"block_size": 1, "st_min_ms": 20}
+}
+```
