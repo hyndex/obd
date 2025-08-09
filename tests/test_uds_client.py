@@ -1,4 +1,5 @@
 import time
+import logging
 import can
 import pytest
 
@@ -310,6 +311,68 @@ def test_receive_overflow(monkeypatch):
 
     fc_frames = [m for m in sent if (m.data[0] >> 4) == 0x3]
     assert fc_frames and fc_frames[0].data[0] == 0x32
+
+
+def test_receive_reset_warns_and_calls_hook(monkeypatch, caplog):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    hooks: list[str] = []
+    client = UDSClient(bus, 0x7E0, 0x7E8, on_reset=lambda: hooks.append("reset"))
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    ff1 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    sf = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x02, 0x62, 0x00, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    responses = [ff1, sf]
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0) if responses else None)
+
+    with caplog.at_level(logging.WARNING):
+        payload = client.receive()
+
+    assert payload[:2] == bytes([0x62, 0x00])
+    assert hooks == ["reset"]
+    assert any("unexpected start-of-frame" in r.message for r in caplog.records)
+
+
+def test_receive_reset_raises_with_error_on_reset(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    hooks: list[str] = []
+    client = UDSClient(
+        bus,
+        0x7E0,
+        0x7E8,
+        on_reset=lambda: hooks.append("reset"),
+        error_on_reset=True,
+    )
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    ff1 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    ff2 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0xAA, 0xBB, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    responses = [ff1, ff2]
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0) if responses else None)
+
+    with pytest.raises(ISOTransportError, match="Unexpected start-of-frame"):
+        client.receive()
+
+    assert hooks == ["reset"]
 
 
 def test_request_tuple_timeouts(monkeypatch):
