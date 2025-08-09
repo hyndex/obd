@@ -436,3 +436,27 @@ def test_request_tuple_timeouts(monkeypatch):
 
     with pytest.raises(ISOTransportError, match="UDS response timeout"):
         client.request(0x22, b"\x01", timeout=(1.0, 0.1))
+
+
+def test_logging_debug(monkeypatch, caplog):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    test_logger = logging.getLogger("uds_test")
+    test_logger.setLevel(logging.DEBUG)
+    client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+    resp = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x02, 0x50, 0x03, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    monkeypatch.setattr(bus, "recv", lambda timeout: resp)
+
+    with caplog.at_level(logging.DEBUG, logger="uds_test"):
+        client.send(0x10, b"\x03")
+        client.receive()
+
+    assert any("Sent Single Frame" in r.message for r in caplog.records)
+    assert any("Received Single Frame" in r.message for r in caplog.records)
