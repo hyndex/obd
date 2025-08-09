@@ -472,3 +472,106 @@ def test_uds_multi_block_fc(log_setup):
 
     fcs = [m for m in sent if m.data[0] == 0x30]
     assert len(fcs) == 2
+
+
+def test_uds_fc_extended_id(log_setup):
+    logger, _ = log_setup
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+
+    uds_cfg = {
+        "ecu_request_id": 0x18DA10F1,
+        "ecu_response_id": 0x18DAF110,
+        "flow_control": {"block_size": 0, "st_min_ms": 0},
+    }
+
+    payload = bytes([0x59, 0x02, 0x00] + [0] * 8)
+    length = len(payload)
+    ff = can.Message(
+        arbitration_id=uds_cfg["ecu_response_id"],
+        data=bytes([0x10 | ((length >> 8) & 0x0F), length & 0xFF])
+        + payload[:6]
+        + bytes(8 - 2 - 6),
+        is_extended_id=True,
+    )
+    cf = can.Message(
+        arbitration_id=uds_cfg["ecu_response_id"],
+        data=bytes([0x21]) + payload[6:] + bytes(7 - len(payload[6:])),
+        is_extended_id=True,
+    )
+    frames = [ff, cf]
+
+    def fake_recv(timeout=1.0):
+        if frames:
+            return frames.pop(0)
+        raise can.CanError("stop")
+
+    sent: list[can.Message] = []
+
+    def fake_send(msg, timeout=None):  # pragma: no cover - simple capture
+        sent.append(msg)
+
+    with pytest.raises(can.CanError):
+        with patch.object(bus, "recv", side_effect=fake_recv), patch.object(
+            bus, "send", side_effect=fake_send
+        ):
+            monitor(bus, None, logger, uds_config=uds_cfg)
+
+    assert sent
+    assert sent[0].is_extended_id
+    assert sent[0].arbitration_id == uds_cfg["ecu_request_id"]
+    assert sent[0].data[0] == 0x30
+
+
+def test_uds_fc_address_extension(log_setup):
+    logger, _ = log_setup
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+
+    uds_cfg = {
+        "ecu_request_id": 0x7E0,
+        "ecu_response_id": 0x7E8,
+        "flow_control": {"block_size": 0, "st_min_ms": 0},
+        "address_extension": 0x99,
+    }
+
+    payload = bytes([0x59, 0x02, 0x02, 0x20, 0xF9, 0x00, 0x40, 0x05, 0x8D, 0x00, 0x40])
+    length = len(payload)
+    ff = can.Message(
+        arbitration_id=uds_cfg["ecu_response_id"],
+        data=bytes([0x99, 0x10 | ((length >> 8) & 0x0F), length & 0xFF])
+        + payload[:5]
+        + bytes(8 - 3 - 5),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=uds_cfg["ecu_response_id"],
+        data=bytes([0x99, 0x21])
+        + payload[5:11]
+        + bytes(6 - len(payload[5:11])),
+        is_extended_id=False,
+    )
+    frames = [ff, cf]
+
+    def fake_recv(timeout=1.0):
+        if frames:
+            return frames.pop(0)
+        raise can.CanError("stop")
+
+    sent: list[can.Message] = []
+
+    def fake_send(msg, timeout=None):  # pragma: no cover - simple capture
+        sent.append(msg)
+
+    with pytest.raises(can.CanError):
+        with patch.object(bus, "recv", side_effect=fake_recv), patch.object(
+            bus, "send", side_effect=fake_send
+        ):
+            monitor(bus, None, logger, uds_config=uds_cfg)
+
+    assert sent
+    assert sent[0].data[0] == 0x99
+    assert sent[0].data[1] == 0x30
+    assert not sent[0].is_extended_id
