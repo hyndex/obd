@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from uds import UDSClient  # noqa: E402
+from isotp_primitives import TDataPrimitive  # noqa: E402
 
 
 def test_send_segments_respects_flow_control(monkeypatch):
@@ -123,3 +124,40 @@ def test_normal_fixed_addressing(monkeypatch):
     assert sent[0].arbitration_id == 0x18DA10F1
     assert sent[0].is_extended_id
     assert payload[:2] == bytes([0x7F, 0x31])
+
+
+def test_tdata_primitives(monkeypatch):
+    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    calls = []
+    t_data = TDataPrimitive(
+        req=lambda s, d: calls.append(("req", s, d)),
+        ind=lambda p: calls.append(("ind", p)),
+        con=lambda ok, err: calls.append(("con", ok)),
+        som_ind=lambda: calls.append(("som_ind",)),
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8, t_data=t_data)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 6, 7, 8, 9, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    responses = [ff, cf]
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0))
+
+    payload = client.request(0x22, b"\x01")
+
+    assert payload == bytes(range(10))
+    assert calls == [
+        ("req", 0x22, b"\x01"),
+        ("con", True),
+        ("som_ind",),
+        ("ind", bytes(range(10))),
+    ]

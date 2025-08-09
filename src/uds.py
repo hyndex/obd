@@ -8,6 +8,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     can = None  # type: ignore
 
+from isotp_primitives import TDataPrimitive
+
 
 class ISOTransportError(RuntimeError):
     """Raised when ISO-TP segmentation or flow control fails."""
@@ -68,6 +70,7 @@ class UDSClient:
         source_address: "int | None" = None,
         target_address: "int | None" = None,
         address_extension: "int | None" = None,
+        t_data: "TDataPrimitive | None" = None,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -79,6 +82,7 @@ class UDSClient:
         self.source_address = source_address
         self.target_address = target_address
         self.address_extension = address_extension
+        self.t_data = t_data
 
         if self.source_address is not None and self.target_address is not None:
             base = 0x18DA
@@ -88,130 +92,142 @@ class UDSClient:
 
     # ------------------------------------------------------------------
     # sending
-    def send(self, service: int, data: bytes, timeout: float = 1.0) -> None:
+    def send(self, service: int, data: bytes, timeout: float = 1.0) -> bool:
         payload = bytes([service]) + data
         single_limit = 7 if self.address_extension is None else 6
-        if len(payload) <= single_limit:
-            pci = len(payload) & 0x0F
+        try:
+            if len(payload) <= single_limit:
+                pci = len(payload) & 0x0F
+                if self.address_extension is not None:
+                    frame_data = (
+                        bytes([self.address_extension, pci])
+                        + payload
+                        + bytes(single_limit - len(payload))
+                    )
+                else:
+                    frame_data = bytes([pci]) + payload + bytes(
+                        single_limit - len(payload)
+                    )
+                frame = can.Message(
+                    arbitration_id=self.req_id,
+                    is_extended_id=self.is_extended_id,
+                    data=frame_data,
+                )
+                self.bus.send(frame, timeout=timeout)
+                if self.t_data and self.t_data.con:
+                    self.t_data.con(True, None)
+                return True
+
+            total_len = len(payload)
+            pci_high = 0x10 | ((total_len >> 8) & 0x0F)
+            pci_low = total_len & 0xFF
+            first_len = 6 if self.address_extension is None else 5
+            first_payload = payload[:first_len]
             if self.address_extension is not None:
-                frame_data = (
-                    bytes([self.address_extension, pci])
-                    + payload
-                    + bytes(single_limit - len(payload))
+                ff_data = (
+                    bytes([self.address_extension, pci_high, pci_low])
+                    + first_payload
+                    + bytes(8 - 3 - len(first_payload))
                 )
             else:
-                frame_data = bytes([pci]) + payload + bytes(single_limit - len(payload))
-            frame = can.Message(
+                ff_data = (
+                    bytes([pci_high, pci_low])
+                    + first_payload
+                    + bytes(8 - 2 - len(first_payload))
+                )
+            ff = can.Message(
                 arbitration_id=self.req_id,
                 is_extended_id=self.is_extended_id,
-                data=frame_data,
+                data=ff_data,
             )
-            self.bus.send(frame, timeout=timeout)
-            return
+            self.bus.send(ff, timeout=timeout)
 
-        total_len = len(payload)
-        pci_high = 0x10 | ((total_len >> 8) & 0x0F)
-        pci_low = total_len & 0xFF
-        first_len = 6 if self.address_extension is None else 5
-        first_payload = payload[:first_len]
-        if self.address_extension is not None:
-            ff_data = (
-                bytes([self.address_extension, pci_high, pci_low])
-                + first_payload
-                + bytes(8 - 3 - len(first_payload))
-            )
-        else:
-            ff_data = (
-                bytes([pci_high, pci_low])
-                + first_payload
-                + bytes(8 - 2 - len(first_payload))
-            )
-        ff = can.Message(
-            arbitration_id=self.req_id,
-            is_extended_id=self.is_extended_id,
-            data=ff_data,
-        )
-        self.bus.send(ff, timeout=timeout)
-
-        # wait for flow control
-        start = time.monotonic()
-        while True:
-            remaining = timeout - (time.monotonic() - start)
-            if remaining <= 0:
-                raise ISOTransportError("No Flow Control frame received")
-            fc = self.bus.recv(remaining)
-            if not fc or fc.arbitration_id != self.resp_id:
-                continue
-            data_fc = bytes(fc.data)
-            if self.address_extension is not None:
-                if data_fc[0] != self.address_extension:
+            # wait for flow control
+            start = time.monotonic()
+            while True:
+                remaining = timeout - (time.monotonic() - start)
+                if remaining <= 0:
+                    raise ISOTransportError("No Flow Control frame received")
+                fc = self.bus.recv(remaining)
+                if not fc or fc.arbitration_id != self.resp_id:
                     continue
-                data_fc = data_fc[1:]
-            if data_fc[0] >> 4 != 0x3:
-                continue
-            fs = data_fc[0] & 0x0F
-            if fs == 0x2:
-                raise ISOTransportError("Flow control overflow")
-            if fs == 0x0:
-                block_size = data_fc[1]
-                st_delay = _calc_st_delay(data_fc[2])
-                break
-            # fs == 0x1 -> wait
-        seq = 1
-        offset = first_len
-        sent_in_block = 0
-        chunk_len = 7 if self.address_extension is None else 6
-        while offset < len(payload):
-            if block_size != 0 and sent_in_block >= block_size:
-                # need next flow control
-                start = time.monotonic()
-                while True:
-                    remaining = timeout - (time.monotonic() - start)
-                    if remaining <= 0:
-                        raise ISOTransportError("Flow control timeout")
-                    fc = self.bus.recv(remaining)
-                    if not fc or fc.arbitration_id != self.resp_id:
+                data_fc = bytes(fc.data)
+                if self.address_extension is not None:
+                    if data_fc[0] != self.address_extension:
                         continue
-                    data_fc = bytes(fc.data)
-                    if self.address_extension is not None:
-                        if data_fc[0] != self.address_extension:
+                    data_fc = data_fc[1:]
+                if data_fc[0] >> 4 != 0x3:
+                    continue
+                fs = data_fc[0] & 0x0F
+                if fs == 0x2:
+                    raise ISOTransportError("Flow control overflow")
+                if fs == 0x0:
+                    block_size = data_fc[1]
+                    st_delay = _calc_st_delay(data_fc[2])
+                    break
+                # fs == 0x1 -> wait
+            seq = 1
+            offset = first_len
+            sent_in_block = 0
+            chunk_len = 7 if self.address_extension is None else 6
+            while offset < len(payload):
+                if block_size != 0 and sent_in_block >= block_size:
+                    # need next flow control
+                    start = time.monotonic()
+                    while True:
+                        remaining = timeout - (time.monotonic() - start)
+                        if remaining <= 0:
+                            raise ISOTransportError("Flow control timeout")
+                        fc = self.bus.recv(remaining)
+                        if not fc or fc.arbitration_id != self.resp_id:
                             continue
-                        data_fc = data_fc[1:]
-                    if data_fc[0] >> 4 != 0x3:
-                        continue
-                    fs = data_fc[0] & 0x0F
-                    if fs == 0x2:
-                        raise ISOTransportError("Flow control overflow")
-                    if fs == 0x0:
-                        block_size = data_fc[1]
-                        st_delay = _calc_st_delay(data_fc[2])
-                        sent_in_block = 0
-                        break
-            chunk = payload[offset : offset + chunk_len]
-            if self.address_extension is not None:
-                cf_data = (
-                    bytes([self.address_extension, 0x20 | (seq & 0x0F)])
-                    + chunk
-                    + bytes(chunk_len - len(chunk))
+                        data_fc = bytes(fc.data)
+                        if self.address_extension is not None:
+                            if data_fc[0] != self.address_extension:
+                                continue
+                            data_fc = data_fc[1:]
+                        if data_fc[0] >> 4 != 0x3:
+                            continue
+                        fs = data_fc[0] & 0x0F
+                        if fs == 0x2:
+                            raise ISOTransportError("Flow control overflow")
+                        if fs == 0x0:
+                            block_size = data_fc[1]
+                            st_delay = _calc_st_delay(data_fc[2])
+                            sent_in_block = 0
+                            break
+                chunk = payload[offset : offset + chunk_len]
+                if self.address_extension is not None:
+                    cf_data = (
+                        bytes([self.address_extension, 0x20 | (seq & 0x0F)])
+                        + chunk
+                        + bytes(chunk_len - len(chunk))
+                    )
+                else:
+                    cf_data = (
+                        bytes([0x20 | (seq & 0x0F)])
+                        + chunk
+                        + bytes(chunk_len - len(chunk))
+                    )
+                cf = can.Message(
+                    arbitration_id=self.req_id,
+                    is_extended_id=self.is_extended_id,
+                    data=cf_data,
                 )
-            else:
-                cf_data = (
-                    bytes([0x20 | (seq & 0x0F)])
-                    + chunk
-                    + bytes(chunk_len - len(chunk))
-                )
-            cf = can.Message(
-                arbitration_id=self.req_id,
-                is_extended_id=self.is_extended_id,
-                data=cf_data,
-            )
-            self.bus.send(cf, timeout=timeout)
-            offset += len(chunk)
-            seq = (seq + 1) & 0x0F
-            sent_in_block += 1
-            if offset < len(payload):
-                time.sleep(st_delay)
-                # loop continues
+                self.bus.send(cf, timeout=timeout)
+                offset += len(chunk)
+                seq = (seq + 1) & 0x0F
+                sent_in_block += 1
+                if offset < len(payload):
+                    time.sleep(st_delay)
+                    # loop continues
+            if self.t_data and self.t_data.con:
+                self.t_data.con(True, None)
+            return True
+        except Exception as exc:
+            if self.t_data and self.t_data.con:
+                self.t_data.con(False, exc)
+            raise
 
     # ------------------------------------------------------------------
     # receiving
@@ -258,13 +274,18 @@ class UDSClient:
             frame_type = data[0] >> 4
             if frame_type == 0x0:  # single
                 length = data[0] & 0x0F
-                return data[1 : 1 + length]
+                payload = data[1 : 1 + length]
+                if self.t_data and self.t_data.ind:
+                    self.t_data.ind(payload)
+                return payload
             if frame_type == 0x1:  # first frame
                 total_len = ((data[0] & 0x0F) << 8) | data[1]
                 state["payload"] = bytearray(data[2:])
                 state["expected"] = total_len - len(state["payload"])
                 state["next_seq"] = 1
                 state["bs"] = 0
+                if self.t_data and self.t_data.som_ind:
+                    self.t_data.som_ind()
                 self._send_fc()
                 continue
             if frame_type == 0x2 and state["expected"] > 0:
@@ -284,6 +305,8 @@ class UDSClient:
                     payload = bytes(state["payload"])
                     state["payload"] = bytearray()
                     state["expected"] = 0
+                    if self.t_data and self.t_data.ind:
+                        self.t_data.ind(payload)
                     return payload
                 if self.rx_block_size > 0 and state["bs"] >= self.rx_block_size:
                     self._send_fc()
@@ -295,6 +318,8 @@ class UDSClient:
 
     # ------------------------------------------------------------------
     def request(self, service: int, data: bytes, timeout: float = 1.0) -> bytes:
+        if self.t_data and self.t_data.req:
+            self.t_data.req(service, data)
         self.send(service, data, timeout)
         return self.receive(timeout)
 
