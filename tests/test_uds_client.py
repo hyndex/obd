@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from uds import UDSClient  # noqa: E402
+from uds import UDSClient, ISOTransportError  # noqa: E402
 from isotp_primitives import TDataPrimitive  # noqa: E402
 
 
@@ -161,3 +161,26 @@ def test_tdata_primitives(monkeypatch):
         ("som_ind",),
         ("ind", bytes(range(10))),
     ]
+
+
+def test_receive_sequence_number_mismatch(monkeypatch):
+    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x22, 6, 7, 8, 9, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    responses = [ff, cf]
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0))
+
+    with pytest.raises(ISOTransportError, match="Sequence number mismatch"):
+        client.receive()

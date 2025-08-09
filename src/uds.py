@@ -293,7 +293,7 @@ class UDSClient:
                 if seq != state["next_seq"]:
                     state["expected"] = 0
                     state["payload"] = bytearray()
-                    continue
+                    raise ISOTransportError("Sequence number mismatch")
                 take = min(
                     state["expected"], 7 if self.address_extension is None else 6
                 )
