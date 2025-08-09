@@ -234,6 +234,12 @@ def _handle_uds_frame(
     data = bytes(msg.data)
     if not data:
         return True
+    addr_ext = None
+    if uds_config and uds_config.get("address_extension") is not None:
+        addr_ext = uds_config.get("address_extension")
+        data = data[1:]
+        if not data:
+            return True
     pci = data[0]
     frame_type = pci >> 4
     # interleaved new message
@@ -254,10 +260,17 @@ def _handle_uds_frame(
         state["next_seq"] = 1
         state["bs_count"] = 0
         if ecu_req_id is not None:
+            fc_data = bytes(
+                [0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]
+            )
+            if addr_ext is not None:
+                fc_data = bytes(
+                    [addr_ext, 0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0]
+                )
             fc = can.Message(
                 arbitration_id=ecu_req_id,
-                data=bytes([0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]),
-                is_extended_id=False,
+                data=fc_data,
+                is_extended_id=bool(ecu_req_id and ecu_req_id > 0x7FF),
             )
             bus.send(fc)
         return True
@@ -268,7 +281,8 @@ def _handle_uds_frame(
             state["payload"] = bytearray()
             state["expected"] = 0
             return True
-        take = min(state["expected"], 7)
+        chunk_len = 7 if addr_ext is None else 6
+        take = min(state["expected"], chunk_len)
         state["payload"].extend(data[1 : 1 + take])  # noqa: E203
         state["expected"] -= take
         state["next_seq"] = (state["next_seq"] + 1) & 0x0F
@@ -281,10 +295,17 @@ def _handle_uds_frame(
             state.pop("bs_count", None)
         elif block_size > 0 and state["bs_count"] >= block_size:
             if ecu_req_id is not None:
+                fc_data = bytes(
+                    [0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]
+                )
+                if addr_ext is not None:
+                    fc_data = bytes(
+                        [addr_ext, 0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0]
+                    )
                 fc = can.Message(
                     arbitration_id=ecu_req_id,
-                    data=bytes([0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]),
-                    is_extended_id=False,
+                    data=fc_data,
+                    is_extended_id=bool(ecu_req_id and ecu_req_id > 0x7FF),
                 )
                 bus.send(fc)
             state["bs_count"] = 0
