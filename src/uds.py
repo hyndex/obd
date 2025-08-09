@@ -40,9 +40,19 @@ class UDSClient:
     rx_st_min: int, optional
         Minimum separation time in milliseconds to advertise in flow
         control frames.
-    key_algo: callable, optional
+        key_algo: callable, optional
         Function applied to the received seed to generate the security
         access key.  When not provided a simple bitwise inversion is used.
+    source_address: int, optional
+        8-bit source address used for normal-fixed addressing.  When both
+        ``source_address`` and ``target_address`` are provided the
+        arbitration identifiers are automatically derived using the
+        29-bit normal-fixed scheme.
+    target_address: int, optional
+        8-bit target address for normal-fixed addressing.
+    address_extension: int, optional
+        Additional address byte prepended to each frame when operating in
+        extended or mixed addressing modes.
     """
 
     def __init__(
@@ -55,6 +65,9 @@ class UDSClient:
         rx_block_size: int = 0,
         rx_st_min: int = 0,
         key_algo: "Callable[[bytes], bytes] | None" = None,
+        source_address: "int | None" = None,
+        target_address: "int | None" = None,
+        address_extension: "int | None" = None,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -63,17 +76,35 @@ class UDSClient:
         self.rx_block_size = rx_block_size
         self.rx_st_min = rx_st_min
         self._key_algo = key_algo
+        self.source_address = source_address
+        self.target_address = target_address
+        self.address_extension = address_extension
+
+        if self.source_address is not None and self.target_address is not None:
+            base = 0x18DA
+            self.req_id = (base << 16) | (self.target_address << 8) | self.source_address
+            self.resp_id = (base << 16) | (self.source_address << 8) | self.target_address
+            self.is_extended_id = True
 
     # ------------------------------------------------------------------
     # sending
     def send(self, service: int, data: bytes, timeout: float = 1.0) -> None:
         payload = bytes([service]) + data
-        if len(payload) <= 7:
+        single_limit = 7 if self.address_extension is None else 6
+        if len(payload) <= single_limit:
             pci = len(payload) & 0x0F
+            if self.address_extension is not None:
+                frame_data = (
+                    bytes([self.address_extension, pci])
+                    + payload
+                    + bytes(single_limit - len(payload))
+                )
+            else:
+                frame_data = bytes([pci]) + payload + bytes(single_limit - len(payload))
             frame = can.Message(
                 arbitration_id=self.req_id,
                 is_extended_id=self.is_extended_id,
-                data=bytes([pci]) + payload + bytes(7 - len(payload)),
+                data=frame_data,
             )
             self.bus.send(frame, timeout=timeout)
             return
@@ -81,13 +112,24 @@ class UDSClient:
         total_len = len(payload)
         pci_high = 0x10 | ((total_len >> 8) & 0x0F)
         pci_low = total_len & 0xFF
-        first_payload = payload[:6]
+        first_len = 6 if self.address_extension is None else 5
+        first_payload = payload[:first_len]
+        if self.address_extension is not None:
+            ff_data = (
+                bytes([self.address_extension, pci_high, pci_low])
+                + first_payload
+                + bytes(8 - 3 - len(first_payload))
+            )
+        else:
+            ff_data = (
+                bytes([pci_high, pci_low])
+                + first_payload
+                + bytes(8 - 2 - len(first_payload))
+            )
         ff = can.Message(
             arbitration_id=self.req_id,
             is_extended_id=self.is_extended_id,
-            data=bytes([pci_high, pci_low])
-            + first_payload
-            + bytes(8 - 2 - len(first_payload)),
+            data=ff_data,
         )
         self.bus.send(ff, timeout=timeout)
 
@@ -101,6 +143,10 @@ class UDSClient:
             if not fc or fc.arbitration_id != self.resp_id:
                 continue
             data_fc = bytes(fc.data)
+            if self.address_extension is not None:
+                if data_fc[0] != self.address_extension:
+                    continue
+                data_fc = data_fc[1:]
             if data_fc[0] >> 4 != 0x3:
                 continue
             fs = data_fc[0] & 0x0F
@@ -112,8 +158,9 @@ class UDSClient:
                 break
             # fs == 0x1 -> wait
         seq = 1
-        offset = 6
+        offset = first_len
         sent_in_block = 0
+        chunk_len = 7 if self.address_extension is None else 6
         while offset < len(payload):
             if block_size != 0 and sent_in_block >= block_size:
                 # need next flow control
@@ -126,6 +173,10 @@ class UDSClient:
                     if not fc or fc.arbitration_id != self.resp_id:
                         continue
                     data_fc = bytes(fc.data)
+                    if self.address_extension is not None:
+                        if data_fc[0] != self.address_extension:
+                            continue
+                        data_fc = data_fc[1:]
                     if data_fc[0] >> 4 != 0x3:
                         continue
                     fs = data_fc[0] & 0x0F
@@ -136,13 +187,23 @@ class UDSClient:
                         st_delay = _calc_st_delay(data_fc[2])
                         sent_in_block = 0
                         break
-            chunk = payload[offset : offset + 7]
+            chunk = payload[offset : offset + chunk_len]
+            if self.address_extension is not None:
+                cf_data = (
+                    bytes([self.address_extension, 0x20 | (seq & 0x0F)])
+                    + chunk
+                    + bytes(chunk_len - len(chunk))
+                )
+            else:
+                cf_data = (
+                    bytes([0x20 | (seq & 0x0F)])
+                    + chunk
+                    + bytes(chunk_len - len(chunk))
+                )
             cf = can.Message(
                 arbitration_id=self.req_id,
                 is_extended_id=self.is_extended_id,
-                data=bytes([0x20 | (seq & 0x0F)])
-                + chunk
-                + bytes(7 - len(chunk)),
+                data=cf_data,
             )
             self.bus.send(cf, timeout=timeout)
             offset += len(chunk)
@@ -155,10 +216,27 @@ class UDSClient:
     # ------------------------------------------------------------------
     # receiving
     def _send_fc(self) -> None:
+        if self.address_extension is not None:
+            data = bytes(
+                [
+                    self.address_extension,
+                    0x30,
+                    self.rx_block_size & 0xFF,
+                    self.rx_st_min & 0xFF,
+                    0,
+                    0,
+                    0,
+                    0,
+                ]
+            )
+        else:
+            data = bytes(
+                [0x30, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF, 0, 0, 0, 0, 0]
+            )
         fc = can.Message(
             arbitration_id=self.req_id,
             is_extended_id=self.is_extended_id,
-            data=bytes([0x30, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF, 0, 0, 0, 0, 0]),
+            data=data,
         )
         self.bus.send(fc)
 
@@ -173,6 +251,10 @@ class UDSClient:
             if not msg or msg.arbitration_id != self.resp_id:
                 continue
             data = bytes(msg.data)
+            if self.address_extension is not None:
+                if data[0] != self.address_extension:
+                    continue
+                data = data[1:]
             frame_type = data[0] >> 4
             if frame_type == 0x0:  # single
                 length = data[0] & 0x0F
@@ -191,7 +273,9 @@ class UDSClient:
                     state["expected"] = 0
                     state["payload"] = bytearray()
                     continue
-                take = min(state["expected"], 7)
+                take = min(
+                    state["expected"], 7 if self.address_extension is None else 6
+                )
                 state["payload"].extend(data[1 : 1 + take])
                 state["expected"] -= take
                 state["next_seq"] = (state["next_seq"] + 1) & 0x0F
