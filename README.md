@@ -115,3 +115,19 @@ The low level ``UDSClient`` helper used by the monitor also exposes a
 configurable timeout.  The ``timeout`` argument of ``send`` and ``request`` may
 be either a single float or a ``(N_Bs, N_Cr)`` tuple to independently limit how
 long the client waits for Flow Control frames and for response data.
+
+### Debug Logging
+
+``UDSClient`` emits detailed debug logs for ISO-TP segmentation. Pass a custom
+logger to its constructor to control logging output:
+
+```python
+import logging
+
+log = logging.getLogger("uds")
+log.setLevel(logging.DEBUG)
+client = UDSClient(bus, 0x7E0, 0x7E8, logger=log)
+```
+
+Key events like frame segmentation, Flow Control waits and errors are logged at
+the ``DEBUG`` level.

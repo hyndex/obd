@@ -13,6 +13,8 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from isotp_primitives import TDataPrimitive
 
+LOGGER = logging.getLogger(__name__)
+
 
 class ISOTransportError(RuntimeError):
     """Raised when ISO-TP segmentation or flow control fails."""
@@ -67,6 +69,8 @@ class UDSClient:
     error_on_reset: bool, optional
         When ``True``, an :class:`ISOTransportError` is raised instead of
         logging a warning when a reset occurs.
+    logger: logging.Logger, optional
+        Logger used for debug output.  Defaults to a module-level logger.
     """
 
     def __init__(
@@ -86,6 +90,7 @@ class UDSClient:
         max_rx_size: "int | None" = None,
         on_reset: "Callable[[], None] | None" = None,
         error_on_reset: bool = False,
+        logger: logging.Logger = LOGGER,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -101,6 +106,7 @@ class UDSClient:
         self.max_rx_size = max_rx_size
         self.on_reset = on_reset
         self.error_on_reset = error_on_reset
+        self.logger = logger
         self._rx_fc_status = 0
 
         if self.source_address is not None and self.target_address is not None:
@@ -135,6 +141,7 @@ class UDSClient:
         """
         payload = bytes([service]) + data
         if len(payload) > 0xFFF:
+            self.logger.debug("Payload too large: %d bytes", len(payload))
             raise ISOTransportError("Payload too large")
         if isinstance(timeout, tuple):
             fc_timeout, send_timeout = timeout
@@ -160,6 +167,7 @@ class UDSClient:
                     data=frame_data,
                 )
                 self.bus.send(frame, timeout=send_timeout)
+                self.logger.debug("Sent Single Frame: %s", frame.data.hex())
                 if self.t_data and self.t_data.con:
                     self.t_data.con(True, None)
                 return True
@@ -187,12 +195,15 @@ class UDSClient:
                 data=ff_data,
             )
             self.bus.send(ff, timeout=send_timeout)
+            self.logger.debug("Sent First Frame: total_len=%d", total_len)
 
             # wait for flow control
+            self.logger.debug("Waiting for Flow Control frame")
             elapsed = 0.0
             while True:
                 remaining = fc_timeout - elapsed
                 if remaining <= 0:
+                    self.logger.debug("No Flow Control frame received")
                     raise ISOTransportError("No Flow Control frame received")
                 wait_start = time.monotonic()
                 fc = self.bus.recv(remaining)
@@ -208,22 +219,34 @@ class UDSClient:
                     continue
                 fs = data_fc[0] & 0x0F
                 if fs == 0x2:
+                    self.logger.debug("Flow control overflow")
                     raise ISOTransportError("Flow control overflow")
                 if fs == 0x0:
                     block_size = data_fc[1]
                     st_delay = _calc_st_delay(data_fc[2])
+                    self.logger.debug(
+                        "Received Flow Control: fs=%d bs=%d st=%.3f",
+                        fs,
+                        block_size,
+                        st_delay,
+                    )
                     break
-                # fs == 0x1 -> wait
+                self.logger.debug("Flow Control WAIT received")
             seq = 1
             offset = first_len
             sent_in_block = 0
             chunk_len = 7 if self.address_extension is None else 6
             while offset < len(payload):
                 if block_size != 0 and sent_in_block >= block_size:
+                    self.logger.debug(
+                        "Block size %d reached, waiting for Flow Control",
+                        block_size,
+                    )
                     # need next flow control
                     while True:
                         remaining = fc_timeout - elapsed
                         if remaining <= 0:
+                            self.logger.debug("Flow control timeout")
                             raise ISOTransportError("Flow control timeout")
                         wait_start = time.monotonic()
                         fc = self.bus.recv(remaining)
@@ -239,12 +262,20 @@ class UDSClient:
                             continue
                         fs = data_fc[0] & 0x0F
                         if fs == 0x2:
+                            self.logger.debug("Flow control overflow")
                             raise ISOTransportError("Flow control overflow")
                         if fs == 0x0:
                             block_size = data_fc[1]
                             st_delay = _calc_st_delay(data_fc[2])
+                            self.logger.debug(
+                                "Received Flow Control: fs=%d bs=%d st=%.3f",
+                                fs,
+                                block_size,
+                                st_delay,
+                            )
                             sent_in_block = 0
                             break
+                        self.logger.debug("Flow Control WAIT received")
                 chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
                     cf_data = (
@@ -264,6 +295,7 @@ class UDSClient:
                     data=cf_data,
                 )
                 self.bus.send(cf, timeout=send_timeout)
+                self.logger.debug("Sent Consecutive Frame seq=%d", seq)
                 offset += len(chunk)
                 seq = (seq + 1) & 0x0F
                 sent_in_block += 1
@@ -274,6 +306,7 @@ class UDSClient:
                 self.t_data.con(True, None)
             return True
         except Exception as exc:
+            self.logger.debug("Send failed: %s", exc)
             if self.t_data and self.t_data.con:
                 self.t_data.con(False, exc)
             raise
@@ -305,6 +338,12 @@ class UDSClient:
             data=data,
         )
         self.bus.send(fc)
+        self.logger.debug(
+            "Sent Flow Control: status=%d bs=%d st_min=%d",
+            status,
+            self.rx_block_size,
+            self.rx_st_min,
+        )
 
     def pause_rx(self) -> None:
         """Request the sender to pause transmission via Flow Control WAIT."""
@@ -326,6 +365,7 @@ class UDSClient:
         while True:
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
+                self.logger.debug("UDS response timeout")
                 raise ISOTransportError("UDS response timeout")
             msg = self.bus.recv(remaining)
             if not msg or msg.arbitration_id != self.resp_id:
@@ -342,15 +382,17 @@ class UDSClient:
                 if self.on_reset:
                     self.on_reset()
                 if self.error_on_reset:
+                    self.logger.debug("Unexpected start-of-frame during reception")
                     raise ISOTransportError(
                         "Unexpected start-of-frame during reception"
                     )
-                logging.warning(
+                self.logger.warning(
                     "ISO-TP reception reset due to unexpected start-of-frame"
                 )
             if frame_type == 0x0:  # single
                 length = data[0] & 0x0F
                 payload = data[1 : 1 + length]  # noqa: E203
+                self.logger.debug("Received Single Frame: len=%d", length)
                 if self.t_data and self.t_data.ind:
                     self.t_data.ind(payload)
                 return payload
@@ -358,6 +400,11 @@ class UDSClient:
                 total_len = ((data[0] & 0x0F) << 8) | data[1]
                 if self.max_rx_size is not None and total_len > self.max_rx_size:
                     self._send_fc(status=2)
+                    self.logger.debug(
+                        "Response length %d exceeds max_rx_size %d",
+                        total_len,
+                        self.max_rx_size,
+                    )
                     raise ISOTransportError("Response length exceeds max_rx_size")
                 state["payload"] = bytearray(data[2:])
                 state["expected"] = total_len - len(state["payload"])
@@ -366,12 +413,18 @@ class UDSClient:
                 if self.t_data and self.t_data.som_ind:
                     self.t_data.som_ind()
                 self._send_fc(status=self._rx_fc_status)
+                self.logger.debug("Received First Frame: total_len=%d", total_len)
                 continue
             if frame_type == 0x2 and state["expected"] > 0:
                 seq = data[0] & 0x0F
                 if seq != state["next_seq"]:
                     state["expected"] = 0
                     state["payload"] = bytearray()
+                    self.logger.debug(
+                        "Sequence number mismatch: expected %d got %d",
+                        state["next_seq"],
+                        seq,
+                    )
                     raise ISOTransportError("Sequence number mismatch")
                 take = min(
                     state["expected"], 7 if self.address_extension is None else 6
@@ -380,6 +433,7 @@ class UDSClient:
                 state["expected"] -= take
                 state["next_seq"] = (state["next_seq"] + 1) & 0x0F
                 state["bs"] += 1
+                self.logger.debug("Received Consecutive Frame seq=%d", seq)
                 if state["expected"] <= 0:
                     payload = bytes(state["payload"])
                     state["payload"] = bytearray()
@@ -397,10 +451,11 @@ class UDSClient:
                 if self.on_reset:
                     self.on_reset()
                 if self.error_on_reset:
+                    self.logger.debug("Unexpected start-of-frame during reception")
                     raise ISOTransportError(
                         "Unexpected start-of-frame during reception"
                     )
-                logging.warning(
+                self.logger.warning(
                     "ISO-TP reception reset due to unexpected start-of-frame"
                 )
                 continue

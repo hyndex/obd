@@ -118,6 +118,18 @@ Example `vcu_security_patch.json`:
 A sample UDS configuration is provided in `uds_config.json` and can be passed
 with `--config` to enable diagnostic trouble code decoding.
 
+To troubleshoot ISO-TP segmentation, ``UDSClient`` supports standard Python
+logging. Create a logger and pass it to the client to view debug output:
+
+```python
+import logging
+from uds import UDSClient
+
+log = logging.getLogger("uds")
+log.setLevel(logging.DEBUG)
+client = UDSClient(bus, 0x7E0, 0x7E8, logger=log)
+```
+
 Run the monitor with the patch enabled:
 
 ```bash
