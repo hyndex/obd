@@ -91,6 +91,21 @@ def test_send_cumulative_fc_timeout(monkeypatch):
         client.send(0x22, data, timeout=1.0)
 
 
+def test_send_rejects_overly_large_payload(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    sent = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    with pytest.raises(ISOTransportError, match="Payload too large"):
+        client.send(0x22, bytes(0x1000))
+
+    assert not sent
+
+
 def test_session_and_security(monkeypatch):
     bus = can.interface.Bus(
         bustype="virtual", bitrate=500000, receive_own_messages=True
@@ -332,7 +347,9 @@ def test_receive_reset_warns_and_calls_hook(monkeypatch, caplog):
         is_extended_id=False,
     )
     responses = [ff1, sf]
-    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0) if responses else None)
+    monkeypatch.setattr(
+        bus, "recv", lambda timeout: responses.pop(0) if responses else None
+    )
 
     with caplog.at_level(logging.WARNING):
         payload = client.receive()
@@ -367,7 +384,9 @@ def test_receive_reset_raises_with_error_on_reset(monkeypatch):
         is_extended_id=False,
     )
     responses = [ff1, ff2]
-    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0) if responses else None)
+    monkeypatch.setattr(
+        bus, "recv", lambda timeout: responses.pop(0) if responses else None
+    )
 
     with pytest.raises(ISOTransportError, match="Unexpected start-of-frame"):
         client.receive()

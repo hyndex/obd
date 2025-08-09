@@ -134,6 +134,8 @@ class UDSClient:
             Consecutive Frame timeout (``N_Cr``).  Default ``1.0`` seconds.
         """
         payload = bytes([service]) + data
+        if len(payload) > 0xFFF:
+            raise ISOTransportError("Payload too large")
         if isinstance(timeout, tuple):
             fc_timeout, send_timeout = timeout
         else:
