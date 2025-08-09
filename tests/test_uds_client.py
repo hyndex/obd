@@ -4,6 +4,7 @@ import pytest
 
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from uds import UDSClient, ISOTransportError  # noqa: E402
@@ -11,7 +12,9 @@ from isotp_primitives import TDataPrimitive  # noqa: E402
 
 
 def test_send_segments_respects_flow_control(monkeypatch):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     sent = []
@@ -21,7 +24,11 @@ def test_send_segments_respects_flow_control(monkeypatch):
 
     monkeypatch.setattr(bus, "send", fake_send)
 
-    fc = can.Message(arbitration_id=0x7E8, data=bytes([0x30, 1, 1, 0, 0, 0, 0, 0]), is_extended_id=False)
+    fc = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x30, 1, 1, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
     fcs = [fc, fc]
 
     def fake_recv(timeout):
@@ -44,7 +51,9 @@ def test_send_segments_respects_flow_control(monkeypatch):
 
 
 def test_session_and_security(monkeypatch):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     sent: list[can.Message] = []
@@ -84,7 +93,9 @@ def test_session_and_security(monkeypatch):
 
 
 def test_extended_addressing(monkeypatch):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     client = UDSClient(bus, 0x7E0, 0x7E8, address_extension=0x99)
 
     sent: list[can.Message] = []
@@ -105,7 +116,9 @@ def test_extended_addressing(monkeypatch):
 
 
 def test_normal_fixed_addressing(monkeypatch):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     client = UDSClient(bus, 0, 0, source_address=0xF1, target_address=0x10)
 
     sent: list[can.Message] = []
@@ -127,7 +140,9 @@ def test_normal_fixed_addressing(monkeypatch):
 
 
 def test_tdata_primitives(monkeypatch):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     calls = []
     t_data = TDataPrimitive(
         req=lambda s, d: calls.append(("req", s, d)),
@@ -164,7 +179,9 @@ def test_tdata_primitives(monkeypatch):
 
 
 def test_receive_sequence_number_mismatch(monkeypatch):
-    bus = can.interface.Bus(bustype="virtual", bitrate=500000, receive_own_messages=True)
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
@@ -184,3 +201,72 @@ def test_receive_sequence_number_mismatch(monkeypatch):
 
     with pytest.raises(ISOTransportError, match="Sequence number mismatch"):
         client.receive()
+
+
+def test_receive_wait_and_resume(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 6, 7, 8, 9, 0, 0, 0]),
+        is_extended_id=False,
+    )
+
+    responses = [ff]
+
+    def fake_recv(timeout):
+        if responses:
+            return responses.pop(0)
+        return None
+
+    sent: list[can.Message] = []
+
+    def fake_send(msg, timeout=None):
+        sent.append(msg)
+        if msg.arbitration_id == 0x7E0 and (msg.data[0] >> 4) == 0x3:
+            fs = msg.data[0] & 0x0F
+            if fs == 1:
+                client.resume_rx()
+            elif fs == 0:
+                responses.append(cf)
+
+    monkeypatch.setattr(bus, "send", fake_send)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    client.pause_rx()
+    payload = client.receive(timeout=1.0)
+
+    assert payload == bytes(range(10))
+    fc_frames = [m for m in sent if (m.data[0] >> 4) == 0x3]
+    assert [f.data[0] for f in fc_frames] == [0x31, 0x30]
+
+
+def test_receive_overflow(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8, max_rx_size=4)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x05, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    sent: list[can.Message] = []
+
+    monkeypatch.setattr(bus, "recv", lambda timeout: ff)
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    with pytest.raises(ISOTransportError, match="max_rx_size"):
+        client.receive()
+
+    fc_frames = [m for m in sent if (m.data[0] >> 4) == 0x3]
+    assert fc_frames and fc_frames[0].data[0] == 0x32

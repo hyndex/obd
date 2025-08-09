@@ -1,7 +1,9 @@
 """UDS client with ISO-TP transport support."""
+
 from __future__ import annotations
 
 import time
+from typing import Callable
 
 try:
     import can
@@ -55,6 +57,9 @@ class UDSClient:
     address_extension: int, optional
         Additional address byte prepended to each frame when operating in
         extended or mixed addressing modes.
+    max_rx_size: int, optional
+        Maximum number of bytes allowed when reassembling multi-frame
+        responses.  When ``None`` no limit is enforced.
     """
 
     def __init__(
@@ -71,6 +76,7 @@ class UDSClient:
         target_address: "int | None" = None,
         address_extension: "int | None" = None,
         t_data: "TDataPrimitive | None" = None,
+        max_rx_size: "int | None" = None,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -83,11 +89,17 @@ class UDSClient:
         self.target_address = target_address
         self.address_extension = address_extension
         self.t_data = t_data
+        self.max_rx_size = max_rx_size
+        self._rx_fc_status = 0
 
         if self.source_address is not None and self.target_address is not None:
             base = 0x18DA
-            self.req_id = (base << 16) | (self.target_address << 8) | self.source_address
-            self.resp_id = (base << 16) | (self.source_address << 8) | self.target_address
+            self.req_id = (
+                (base << 16) | (self.target_address << 8) | self.source_address
+            )
+            self.resp_id = (
+                (base << 16) | (self.source_address << 8) | self.target_address
+            )
             self.is_extended_id = True
 
     # ------------------------------------------------------------------
@@ -105,8 +117,8 @@ class UDSClient:
                         + bytes(single_limit - len(payload))
                     )
                 else:
-                    frame_data = bytes([pci]) + payload + bytes(
-                        single_limit - len(payload)
+                    frame_data = (
+                        bytes([pci]) + payload + bytes(single_limit - len(payload))
                     )
                 frame = can.Message(
                     arbitration_id=self.req_id,
@@ -196,7 +208,7 @@ class UDSClient:
                             st_delay = _calc_st_delay(data_fc[2])
                             sent_in_block = 0
                             break
-                chunk = payload[offset : offset + chunk_len]
+                chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
                     cf_data = (
                         bytes([self.address_extension, 0x20 | (seq & 0x0F)])
@@ -231,12 +243,13 @@ class UDSClient:
 
     # ------------------------------------------------------------------
     # receiving
-    def _send_fc(self) -> None:
+    def _send_fc(self, status: int = 0) -> None:
+        pci = 0x30 | (status & 0x0F)
         if self.address_extension is not None:
             data = bytes(
                 [
                     self.address_extension,
-                    0x30,
+                    pci,
                     self.rx_block_size & 0xFF,
                     self.rx_st_min & 0xFF,
                     0,
@@ -247,7 +260,7 @@ class UDSClient:
             )
         else:
             data = bytes(
-                [0x30, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF, 0, 0, 0, 0, 0]
+                [pci, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF, 0, 0, 0, 0, 0]
             )
         fc = can.Message(
             arbitration_id=self.req_id,
@@ -256,8 +269,22 @@ class UDSClient:
         )
         self.bus.send(fc)
 
+    def pause_rx(self) -> None:
+        """Request the sender to pause transmission via Flow Control WAIT."""
+        self._rx_fc_status = 1
+
+    def resume_rx(self) -> None:
+        """Resume a paused transfer by sending a Flow Control CTS frame."""
+        self._rx_fc_status = 0
+        self._send_fc(status=0)
+
     def receive(self, timeout: float = 1.0) -> bytes:
-        state: dict[str, any] = {"expected": 0, "payload": bytearray(), "next_seq": 0, "bs": 0}
+        state: dict[str, any] = {
+            "expected": 0,
+            "payload": bytearray(),
+            "next_seq": 0,
+            "bs": 0,
+        }
         start = time.monotonic()
         while True:
             remaining = timeout - (time.monotonic() - start)
@@ -274,19 +301,22 @@ class UDSClient:
             frame_type = data[0] >> 4
             if frame_type == 0x0:  # single
                 length = data[0] & 0x0F
-                payload = data[1 : 1 + length]
+                payload = data[1 : 1 + length]  # noqa: E203
                 if self.t_data and self.t_data.ind:
                     self.t_data.ind(payload)
                 return payload
             if frame_type == 0x1:  # first frame
                 total_len = ((data[0] & 0x0F) << 8) | data[1]
+                if self.max_rx_size is not None and total_len > self.max_rx_size:
+                    self._send_fc(status=2)
+                    raise ISOTransportError("Response length exceeds max_rx_size")
                 state["payload"] = bytearray(data[2:])
                 state["expected"] = total_len - len(state["payload"])
                 state["next_seq"] = 1
                 state["bs"] = 0
                 if self.t_data and self.t_data.som_ind:
                     self.t_data.som_ind()
-                self._send_fc()
+                self._send_fc(status=self._rx_fc_status)
                 continue
             if frame_type == 0x2 and state["expected"] > 0:
                 seq = data[0] & 0x0F
@@ -297,7 +327,7 @@ class UDSClient:
                 take = min(
                     state["expected"], 7 if self.address_extension is None else 6
                 )
-                state["payload"].extend(data[1 : 1 + take])
+                state["payload"].extend(data[1 : 1 + take])  # noqa: E203
                 state["expected"] -= take
                 state["next_seq"] = (state["next_seq"] + 1) & 0x0F
                 state["bs"] += 1
@@ -309,7 +339,7 @@ class UDSClient:
                         self.t_data.ind(payload)
                     return payload
                 if self.rx_block_size > 0 and state["bs"] >= self.rx_block_size:
-                    self._send_fc()
+                    self._send_fc(status=self._rx_fc_status)
                     state["bs"] = 0
                 continue
             # new SF/FF while in progress -> reset
