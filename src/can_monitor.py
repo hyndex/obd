@@ -529,6 +529,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                             .get("block_size", 0),
                             rx_st_min=uds_cfg.get("flow_control", {})
                             .get("st_min_ms", 0),
+                            source_address=uds_cfg.get("source_address"),
+                            target_address=uds_cfg.get("target_address"),
+                            address_extension=uds_cfg.get("address_extension"),
                         )
                         sess = uds_cfg.get("session")
                         if sess is not None:
