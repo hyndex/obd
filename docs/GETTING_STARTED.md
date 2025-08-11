@@ -82,43 +82,13 @@ Additional options:
 - `--print-raw` – include raw CAN payloads in the log.
 
 - `--config settings.json` – load options from a JSON file (`log_level`, startup
-  `patches`, etc.).
+  sequence, etc.).
 
-Example `vcu_security_patch.json`:
-
-```json
-{
-  "log_level": "INFO",
-  "patches": {
-    "vcu_enter_extended_session": {
-      "can_id": 2016,
-      "payload": "02 10 03 00 00 00 00 00",
-      "response_id": 2024,
-      "timeout_ms": 500,
-      "retries": 1
-    },
-    "vcu_security_level1": {
-      "can_id": 2016,
-      "payload": "06 27 01 01 01 00 00 00",
-      "response_id": 2024,
-      "timeout_ms": 500,
-      "retries": 2
-    },
-    "vcu_read_dtc": {
-      "can_id": 2016,
-      "payload": "03 19 02 FF 00 00 00 00",
-      "response_id": 2024,
-      "timeout_ms": 500,
-      "retries": 1
-    }
-  }
-}
-```
-
-A sample UDS configuration is provided in `uds_config.json` and can be passed
-with `--config` to enable diagnostic trouble code decoding.  The security block
-supports an optional ``algorithm`` entry referencing a callable or
-``module:attr`` string used to derive the access key.
+`uds_config.json` combines the startup sequence with UDS options.  The
+``sequence`` section issues the extended-session request, security seed/key
+exchange, DTC read and a flow-control frame.  The security block supports an
+optional ``algorithm`` entry referencing a callable or ``module:attr`` string
+used to derive the access key.
 
 To troubleshoot ISO-TP segmentation, ``UDSClient`` supports standard Python
 logging. Create a logger and pass it to the client to view debug output:
@@ -132,10 +102,10 @@ log.setLevel(logging.DEBUG)
 client = UDSClient(bus, 0x7E0, 0x7E8, logger=log)
 ```
 
-Run the monitor with the patch enabled:
+Run the monitor with the configuration:
 
 ```bash
-python -m can_monitor --interface can0 --bitrate 250000 --config vcu_security_patch.json
+python -m can_monitor --interface can0 --bitrate 250000 --config uds_config.json
 ```
 
 When `--print-raw` is supplied, the log records the raw CAN payload for each

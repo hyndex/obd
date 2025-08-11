@@ -9,8 +9,9 @@ configuration details, fault-code mapping and the handling of edge cases.
 
 The CAN monitor establishes an ISO‑TP/UDS channel to the VCU.  Request and
 response identifiers, addressing options and flow‑control tuning are defined in
-`uds_config.json`.  The initial handshake and diagnostic actions are scripted via
-`vcu_security_patch.json`.
+`uds_config.json`.  The same configuration file also defines a ``sequence`` of
+startup frames used to enter the diagnostic session, unlock security and poll
+for DTCs.
 
 ```
 UDSClient -> CAN bus -> VCU -> CAN bus -> UDSClient
@@ -31,23 +32,8 @@ Each step and the associated configuration are detailed below.
 ### Extended Session Request
 
 The monitor sends `02 10 03 00 00 00 00 00` to request an extended diagnostic
-session as defined by the `vcu_enter_extended_session` patch.  The VCU replies
+session as the first step of the configuration ``sequence``.  The VCU replies
 with `50 03` if the transition is successful.
-
-```json
-{
-  "vcu_enter_extended_session": {
-    "can_id": 2016,
-    "payload": "02 10 03 00 00 00 00 00",
-    "response_id": 2024,
-    "timeout_ms": 500,
-    "retries": 1
-  }
-}
-```
-
-If no positive response is received within `timeout_ms` the patch is retried the
-specified number of times.  Exhausting retries aborts the UDS start‑up.
 
 ### Security Access
 After the session switch the client requests security level 1.  The first
@@ -55,19 +41,7 @@ request (`06 27 01 01 01 00 00 00`) asks the VCU for a seed.  The client then
 computes the corresponding key and submits it in a follow‑up `0x27` request.  The
 algorithm used to derive the key is pluggable: by default the seed bytes are
 bit‑wise inverted, but a custom function or ``module:attr`` string can be
-supplied in configuration under ``security.algorithm``.
-
-```json
-{
-  "vcu_security_level1": {
-    "can_id": 2016,
-    "payload": "06 27 01 01 01 00 00 00",
-    "response_id": 2024,
-    "timeout_ms": 500,
-    "retries": 2
-  }
-}
-```
+supplied in configuration under ``uds.security.algorithm``.
 
 If the VCU does not answer with a positive response (`0x67`) or the computed key
 is rejected, :meth:`security_access` raises :class:`ISOTransportError` with the
@@ -213,7 +187,7 @@ new vehicles without code changes.
 ## Summary
 
 The UDS implementation follows the complete extended‑session and security
-handshake before polling DTCs.  It honours the patches and configuration shipped
+handshake before polling DTCs.  It honours the configuration sequence shipped
 with this repository and provides hooks to customise security algorithms, flow
 control and DTC metadata.  Robust error handling ensures the session terminates
 cleanly when unexpected conditions occur.

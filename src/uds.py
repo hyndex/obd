@@ -528,7 +528,14 @@ class UDSClient:
         else:
             send_to = recv_to = timeout
         self._send(service, data, send_to)
-        return self._receive(recv_to)
+        start = time.monotonic()
+        while True:
+            remaining = recv_to - (time.monotonic() - start)
+            rsp = self._receive(remaining)
+            if len(rsp) >= 3 and rsp[0] == 0x7F and rsp[2] == 0x78:
+                # NRC 0x78: response pending, wait for final response
+                continue
+            return rsp
 
     def send(
         self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0

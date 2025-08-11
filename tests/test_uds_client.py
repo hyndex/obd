@@ -108,6 +108,34 @@ def test_send_rejects_overly_large_payload(monkeypatch):
     assert not sent
 
 
+def test_request_handles_response_pending(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    resp_pending = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x03, 0x7F, 0x10, 0x78, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    resp_final = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x02, 0x50, 0x03, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    responses = [resp_pending, resp_final]
+
+    def fake_recv(timeout):
+        return responses.pop(0)
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    payload = client.request(0x10, b"\x03")
+    assert payload[:2] == bytes([0x50, 0x03])
+
+
 def test_session_and_security(monkeypatch):
     bus = can.interface.Bus(
         bustype="virtual", bitrate=500000, receive_own_messages=True
