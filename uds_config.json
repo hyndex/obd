@@ -1,13 +1,6 @@
 {
-  "interval_ms": 500,
-  "sequence": [
-    {
-      "can_id": 2016,
-      "payload": "02010D0000000000",
-      "response_id": 2024,
-      "timeout_ms": 100
-    }
-  ],
+  "log_level": "INFO",
+  "interface": { "type": "socketcan", "channel": "can0" },
   "uds": {
     "ecu_request_id": 2016,
     "ecu_response_id": 2024,
@@ -15,8 +8,6 @@
     "source_address": 241,
     "target_address": 16,
     "address_extension": null,
-    "session": 3,
-    "security": { "level": 1, "key": null, "algorithm": null },
     "flow_control": { "block_size": 1, "st_min_ms": 1 },
     "dtcs": {
       "P058D": {
@@ -170,5 +161,38 @@
         "component": "SENSORS"
       }
     }
-  }
+  },
+  "sequence": [
+    {
+      "name": "enter_session",
+      "can_id": 2016,
+      "payload": "02 10 03 00 00 00 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "request_seed",
+      "can_id": 2016,
+      "payload": "06 27 01 01 01 00 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "send_key",
+      "can_id": 2016,
+      "payload": "06 27 02 01 FF FF 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "read_dtc",
+      "can_id": 2016,
+      "payload": "03 19 02 FF 00 00 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "flow_control",
+      "can_id": 2024,
+      "payload": "30 01 01 00 00 00 00 00",
+      "response_id": null
+    }
+  ],
+  "interval_ms": 500
 }

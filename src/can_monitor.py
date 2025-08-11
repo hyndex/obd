@@ -152,7 +152,10 @@ def _convert_to_pcode(code_bytes: bytes) -> str:
 
 
 def _process_uds_payload(
-    payload: bytes, uds_config: dict[str, Any], logger: logging.Logger
+    payload: bytes,
+    state: dict[str, Any],
+    uds_config: dict[str, Any],
+    logger: logging.Logger,
 ) -> None:
     """Parse a complete UDS payload containing DTC information."""
     if not payload:
@@ -182,6 +185,9 @@ def _process_uds_payload(
             nrc,
             desc,
         )
+        if nrc == 0x78:
+            # signal to the caller that a final response is pending
+            state["pending"] = True
         return
 
     if len(payload) < 3:
@@ -251,7 +257,7 @@ def _handle_uds_frame(
     if frame_type == 0x0:  # single frame
         length = pci & 0xF
         payload = data[1 : 1 + length]  # noqa: E203
-        _process_uds_payload(payload, uds_config, logger)
+        _process_uds_payload(payload, state, uds_config, logger)
         return True
     if frame_type == 0x1:  # first frame
         length = ((pci & 0xF) << 8) | data[1]
@@ -288,7 +294,7 @@ def _handle_uds_frame(
         state["next_seq"] = (state["next_seq"] + 1) & 0x0F
         state["bs_count"] = state.get("bs_count", 0) + 1
         if state["expected"] <= 0:
-            _process_uds_payload(bytes(state["payload"]), uds_config, logger)
+            _process_uds_payload(bytes(state["payload"]), state, uds_config, logger)
             state["payload"] = bytearray()
             state["expected"] = 0
             state.pop("next_seq", None)
@@ -353,6 +359,7 @@ def _sequence_loop(
                             logger,
                         )
                         and state.get("expected", 0) <= 0
+                        and not state.pop("pending", False)
                     ):
                         break
         elapsed = (time.time() - start) * 1000
@@ -644,9 +651,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                             )
                             try:
                                 client.security_access(level, key)
-                                logger.info(
-                                    "UDS security level %s unlocked", level
-                                )
+                                logger.info("UDS security level %s unlocked", level)
                             except ISOTransportError as exc:
                                 logger.warning(
                                     "UDS security level %s denied: %s", level, exc
