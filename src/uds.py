@@ -24,6 +24,29 @@ from isotp_primitives import TDataPrimitive
 
 LOGGER = logging.getLogger(__name__)
 
+_NRC_DESC = {
+    0x10: "General reject",
+    0x11: "Service not supported",
+    0x12: "Sub-function not supported",
+    0x13: "Incorrect message length or invalid format",
+    0x14: "Response too long",
+    0x21: "Busy repeat request",
+    0x22: "Conditions not correct (e.g. wrong baud rate)",
+    0x24: "Request sequence error",
+    0x31: "Request out of range",
+    0x33: "Security access denied (possible wrong security patch)",
+    0x35: "Invalid key (security challenge failed)",
+    0x36: "Exceeded number of attempts",
+    0x37: "Required time delay not expired",
+    0x78: "Response pending",
+}
+
+
+def _nrc_desc(code: int) -> str:
+    """Return human readable description for a negative response code."""
+
+    return _NRC_DESC.get(code, "Unknown error")
+
 
 def default_key_algo(seed: bytes) -> bytes:
     """Fallback key algorithm performing a bitwise inversion."""
@@ -172,7 +195,7 @@ class UDSClient:
     ) -> bool:
         payload = bytes([service]) + data
         if len(payload) > 0xFFF:
-            self.logger.debug("Payload too large: %d bytes", len(payload))
+            self.logger.error("Payload too large: %d bytes", len(payload))
             raise ISOTransportError("Payload too large")
         if isinstance(timeout, tuple):
             fc_timeout, send_timeout = timeout
@@ -235,7 +258,7 @@ class UDSClient:
             while True:
                 remaining = fc_timeout - elapsed
                 if remaining <= 0:
-                    self.logger.debug("No Flow Control frame received")
+                    self.logger.error("No Flow Control frame received")
                     raise ISOTransportError("No Flow Control frame received")
                 wait_start = time.monotonic()
                 fc = self.bus.recv(remaining)
@@ -251,7 +274,7 @@ class UDSClient:
                     continue
                 fs = data_fc[0] & 0x0F
                 if fs == 0x2:
-                    self.logger.debug("Flow control overflow")
+                    self.logger.error("Flow control overflow")
                     raise ISOTransportError("Flow control overflow")
                 if fs == 0x0:
                     block_size = data_fc[1]
@@ -267,7 +290,7 @@ class UDSClient:
                 wait_count += 1
                 self.logger.debug("Flow Control WAIT received (%d)", wait_count)
                 if wait_count > self.wft_max:
-                    self.logger.debug("Flow control WAIT limit exceeded")
+                    self.logger.error("Flow control WAIT limit exceeded")
                     raise ISOTransportError("Too many Flow Control WAIT frames")
             seq = 1
             offset = first_len
@@ -283,7 +306,7 @@ class UDSClient:
                     while True:
                         remaining = fc_timeout - elapsed
                         if remaining <= 0:
-                            self.logger.debug("Flow control timeout")
+                            self.logger.error("Flow control timeout")
                             raise ISOTransportError("Flow control timeout")
                         wait_start = time.monotonic()
                         fc = self.bus.recv(remaining)
@@ -299,7 +322,7 @@ class UDSClient:
                             continue
                         fs = data_fc[0] & 0x0F
                         if fs == 0x2:
-                            self.logger.debug("Flow control overflow")
+                            self.logger.error("Flow control overflow")
                             raise ISOTransportError("Flow control overflow")
                         if fs == 0x0:
                             block_size = data_fc[1]
@@ -316,7 +339,7 @@ class UDSClient:
                         wait_count += 1
                         self.logger.debug("Flow Control WAIT received (%d)", wait_count)
                         if wait_count > self.wft_max:
-                            self.logger.debug("Flow control WAIT limit exceeded")
+                            self.logger.error("Flow control WAIT limit exceeded")
                             raise ISOTransportError("Too many Flow Control WAIT frames")
                 chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
@@ -348,7 +371,7 @@ class UDSClient:
                 self.t_data.con(True, None)
             return True
         except Exception as exc:
-            self.logger.debug("Send failed: %s", exc)
+            self.logger.error("Send failed: %s", exc)
             if self.t_data and self.t_data.con:
                 self.t_data.con(False, exc)
             raise
@@ -408,7 +431,7 @@ class UDSClient:
         while True:
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
-                self.logger.debug("UDS response timeout")
+                self.logger.error("UDS response timeout")
                 raise ISOTransportError("UDS response timeout")
             msg = self.bus.recv(remaining)
             if not msg or msg.arbitration_id != self.resp_id:
@@ -425,7 +448,7 @@ class UDSClient:
                 if self.on_reset:
                     self.on_reset()
                 if self.error_on_reset:
-                    self.logger.debug("Unexpected start-of-frame during reception")
+                    self.logger.error("Unexpected start-of-frame during reception")
                     raise ISOTransportError(
                         "Unexpected start-of-frame during reception"
                     )
@@ -443,7 +466,7 @@ class UDSClient:
                 total_len = ((data[0] & 0x0F) << 8) | data[1]
                 if self.max_rx_size is not None and total_len > self.max_rx_size:
                     self._send_fc(status=2)
-                    self.logger.debug(
+                    self.logger.error(
                         "Response length %d exceeds max_rx_size %d",
                         total_len,
                         self.max_rx_size,
@@ -458,7 +481,7 @@ class UDSClient:
                 if self._rx_fc_status == 1:
                     wait_count += 1
                     if wait_count > self.wft_max:
-                        self.logger.debug("Flow control WAIT limit exceeded")
+                        self.logger.error("Flow control WAIT limit exceeded")
                         raise ISOTransportError("Too many Flow Control WAIT frames")
                 else:
                     wait_count = 0
@@ -470,7 +493,7 @@ class UDSClient:
                 if seq != state["next_seq"]:
                     state["expected"] = 0
                     state["payload"] = bytearray()
-                    self.logger.debug(
+                    self.logger.error(
                         "Sequence number mismatch: expected %d got %d",
                         state["next_seq"],
                         seq,
@@ -495,7 +518,7 @@ class UDSClient:
                     if self._rx_fc_status == 1:
                         wait_count += 1
                         if wait_count > self.wft_max:
-                            self.logger.debug("Flow control WAIT limit exceeded")
+                            self.logger.error("Flow control WAIT limit exceeded")
                             raise ISOTransportError("Too many Flow Control WAIT frames")
                     else:
                         wait_count = 0
@@ -508,7 +531,7 @@ class UDSClient:
                 if self.on_reset:
                     self.on_reset()
                 if self.error_on_reset:
-                    self.logger.debug("Unexpected start-of-frame during reception")
+                    self.logger.error("Unexpected start-of-frame during reception")
                     raise ISOTransportError(
                         "Unexpected start-of-frame during reception"
                     )
@@ -527,14 +550,33 @@ class UDSClient:
             send_to, recv_to = timeout
         else:
             send_to = recv_to = timeout
+        self.logger.debug(
+            "Sending service 0x%02X with payload %s", service, data.hex()
+        )
         self._send(service, data, send_to)
         start = time.monotonic()
         while True:
             remaining = recv_to - (time.monotonic() - start)
             rsp = self._receive(remaining)
+            self.logger.debug(
+                "Response for service 0x%02X: %s", service, rsp.hex()
+            )
             if len(rsp) >= 3 and rsp[0] == 0x7F and rsp[2] == 0x78:
                 # NRC 0x78: response pending, wait for final response
+                self.logger.info(
+                    "Service 0x%02X pending (NRC 0x78)", service
+                )
                 continue
+            if len(rsp) >= 3 and rsp[0] == 0x7F:
+                code = rsp[2]
+                self.logger.error(
+                    "Service 0x%02X failed: NRC 0x%02X - %s",
+                    rsp[1],
+                    code,
+                    _nrc_desc(code),
+                )
+            else:
+                self.logger.info("Service 0x%02X succeeded", service)
             return rsp
 
     def send(
@@ -550,7 +592,15 @@ class UDSClient:
         if not self._lock.acquire(blocking=False):
             raise RuntimeError("UDSClient operation already in progress")
         try:
-            return self._send(service, data, timeout)
+            self.logger.debug(
+                "Send API called for service 0x%02X with payload %s",
+                service,
+                data.hex(),
+            )
+            ok = self._send(service, data, timeout)
+            if ok:
+                self.logger.info("Service 0x%02X send complete", service)
+            return ok
         finally:
             self._lock.release()
 
@@ -565,7 +615,10 @@ class UDSClient:
         if not self._lock.acquire(blocking=False):
             raise RuntimeError("UDSClient operation already in progress")
         try:
-            return self._receive(timeout)
+            self.logger.debug("Waiting for response with timeout %.3f", timeout)
+            payload = self._receive(timeout)
+            self.logger.info("Received payload: %s", payload.hex())
+            return payload
         finally:
             self._lock.release()
 
@@ -588,8 +641,24 @@ class UDSClient:
 
     # high-level services ------------------------------------------------
     def change_session(self, session: int, timeout: float = 1.0) -> bool:
+        self.logger.info("Requesting session 0x%02X", session)
         rsp = self.request(0x10, bytes([session]), timeout)
-        return rsp[:2] == bytes([0x50, session])
+        if rsp[:2] == bytes([0x50, session]):
+            self.logger.info("Session 0x%02X accepted", session)
+            return True
+        if len(rsp) >= 3 and rsp[0] == 0x7F:
+            code = rsp[2]
+            self.logger.error(
+                "Session 0x%02X rejected: NRC 0x%02X - %s",
+                session,
+                code,
+                _nrc_desc(code),
+            )
+        else:
+            self.logger.error(
+                "Unexpected response to session change: %s", rsp.hex()
+            )
+        return False
 
     def security_access(
         self, level: int, key: "bytes | None" = None, timeout: float = 1.0
@@ -608,26 +677,46 @@ class UDSClient:
             unexpected.
         """
 
+        self.logger.info("Requesting security access level %d", level)
         rsp = self.request(0x27, bytes([level * 2 - 1]), timeout)
         if len(rsp) < 2:
+            self.logger.error("Invalid seed response")
             raise ISOTransportError("Invalid seed response")
         if rsp[0] == 0x7F:
             code = rsp[2] if len(rsp) > 2 else 0
+            self.logger.error(
+                "Security seed request denied: NRC 0x%02X - %s",
+                code,
+                _nrc_desc(code),
+            )
             raise ISOTransportError(f"Security seed request denied (NRC 0x{code:02X})")
         if rsp[0] != 0x67 or rsp[1] != level * 2 - 1:
+            self.logger.error("Unexpected seed response: %s", rsp.hex())
             raise ISOTransportError("Unexpected seed response")
         seed = rsp[2:]
         if key is None:
             key = self._key_algo(seed)
+        self.logger.info("Submitting key for security level %d", level)
         rsp2 = self.request(0x27, bytes([level * 2]) + key, timeout)
         if len(rsp2) < 2:
+            self.logger.error("Invalid key response")
             raise ISOTransportError("Invalid key response")
         if rsp2[0] == 0x7F:
             code = rsp2[2] if len(rsp2) > 2 else 0
+            self.logger.error(
+                "Security access denied: NRC 0x%02X - %s",
+                code,
+                _nrc_desc(code),
+            )
             raise ISOTransportError(f"Security access denied (NRC 0x{code:02X})")
         if rsp2[:2] != bytes([0x67, level * 2]):
+            self.logger.error("Unexpected key response: %s", rsp2.hex())
             raise ISOTransportError("Unexpected key response")
+        self.logger.info("Security access level %d granted", level)
         return True
 
     def read_dtc_by_status_mask(self, mask: int = 0xFF, timeout: float = 1.0) -> bytes:
-        return self.request(0x19, bytes([0x02, mask]), timeout)
+        self.logger.info("Reading DTCs with status mask 0x%02X", mask)
+        rsp = self.request(0x19, bytes([0x02, mask]), timeout)
+        self.logger.info("Read DTCs response length %d", len(rsp))
+        return rsp
