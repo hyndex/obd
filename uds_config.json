@@ -1,4 +1,13 @@
 {
+  "interval_ms": 500,
+  "sequence": [
+    {
+      "can_id": 2016,
+      "payload": "02010D0000000000",
+      "response_id": 2024,
+      "timeout_ms": 100
+    }
+  ],
   "uds": {
     "ecu_request_id": 2016,
     "ecu_response_id": 2024,
