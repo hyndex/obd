@@ -193,12 +193,12 @@ def _process_uds_payload(
     if len(payload) < 3:
         return
     if payload[0] == 0x59 and payload[1] == 0x02:
-        dtc_count = payload[2]
+        # Response to reportDTCByStatusMask. Byte 2 is the status
+        # availability mask, followed by repeated <DTC+status> records.
         entries = payload[3:]
+        dtc_count = len(entries) // 4
         for i in range(dtc_count):
             start = i * 4
-            if start + 4 > len(entries):
-                break
             code = _convert_to_pcode(entries[start : start + 3])  # noqa: E203
             info = uds_config.get("dtcs", {}).get(code)
             if info:
