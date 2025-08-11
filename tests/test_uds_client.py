@@ -18,7 +18,7 @@ def test_send_segments_respects_flow_control(monkeypatch):
     bus = can.interface.Bus(
         bustype="virtual", bitrate=500000, receive_own_messages=True
     )
-    client = UDSClient(bus, 0x7E0, 0x7E8)
+    client = UDSClient(bus, 0x7E0, 0x7E8, key_algo="uds:default_key_algo")
 
     sent = []
 
@@ -148,6 +148,48 @@ def test_session_and_security(monkeypatch):
     assert len(sent) == 3
     # verify key derived from seed AA BB -> 55 44 (bitwise inversion)
     assert sent[2].data[:5] == bytes([0x04, 0x27, 0x02, 0x55, 0x44])
+
+
+def test_security_access_invalid_key(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    resp_seed = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x04, 0x67, 0x01, 0xAA, 0xBB, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    resp_neg = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x03, 0x7F, 0x27, 0x35, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    responses = [resp_seed, resp_neg]
+    monkeypatch.setattr(bus, "recv", lambda timeout: responses.pop(0))
+
+    with pytest.raises(ISOTransportError, match="0x35"):
+        client.security_access(1, b"\x00\x00")
+
+
+def test_security_access_negative_response(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    resp_neg = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x03, 0x7F, 0x27, 0x22, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    monkeypatch.setattr(bus, "recv", lambda timeout: resp_neg)
+
+    with pytest.raises(ISOTransportError, match="0x22"):
+        client.security_access(1, b"\x00\x00")
 
 
 def test_extended_addressing(monkeypatch):

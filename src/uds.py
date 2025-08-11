@@ -9,6 +9,7 @@ messaging methods must be serialized externally or they will raise a
 
 from __future__ import annotations
 
+import importlib
 import logging
 import threading
 import time
@@ -22,6 +23,31 @@ except ImportError:  # pragma: no cover - optional dependency
 from isotp_primitives import TDataPrimitive
 
 LOGGER = logging.getLogger(__name__)
+
+
+def default_key_algo(seed: bytes) -> bytes:
+    """Fallback key algorithm performing a bitwise inversion."""
+
+    return bytes((b ^ 0xFF) & 0xFF for b in seed)
+
+
+def _load_key_algo(
+    spec: "Callable[[bytes], bytes] | str | None",
+) -> "Callable[[bytes], bytes]":
+    """Resolve a key algorithm from a callable or ``module:attr`` string."""
+
+    if spec is None:
+        return default_key_algo
+    if callable(spec):
+        return spec
+    if isinstance(spec, str):
+        module_name, _, attr = spec.partition(":")
+        module = importlib.import_module(module_name)
+        algo = getattr(module, attr) if attr else module
+        if callable(algo):
+            return algo  # type: ignore[arg-type]
+        raise TypeError("Security key algorithm is not callable")
+    raise TypeError("Invalid key algorithm specification")
 
 
 class ISOTransportError(RuntimeError):
@@ -59,9 +85,11 @@ class UDSClient:
     rx_st_min: int, optional
         Minimum separation time in milliseconds to advertise in flow
         control frames.
-        key_algo: callable, optional
+        key_algo: callable or ``module:attr`` string, optional
         Function applied to the received seed to generate the security
-        access key.  When not provided a simple bitwise inversion is used.
+        access key. When ``None`` a default inversion-based algorithm is
+        used.  If a string is supplied it is treated as ``module:attr`` and
+        imported dynamically, allowing pluggable algorithms.
     source_address: int, optional
         8-bit source address used for normal-fixed addressing.  When both
         ``source_address`` and ``target_address`` are provided the
@@ -94,7 +122,7 @@ class UDSClient:
         is_extended_id: bool = False,
         rx_block_size: int = 0,
         rx_st_min: int = 0,
-        key_algo: "Callable[[bytes], bytes] | None" = None,
+        key_algo: "Callable[[bytes], bytes] | str | None" = None,
         source_address: "int | None" = None,
         target_address: "int | None" = None,
         address_extension: "int | None" = None,
@@ -110,7 +138,7 @@ class UDSClient:
         self.is_extended_id = is_extended_id
         self.rx_block_size = rx_block_size
         self.rx_st_min = rx_st_min
-        self._key_algo = key_algo
+        self._key_algo = _load_key_algo(key_algo)
         self.source_address = source_address
         self.target_address = target_address
         self.address_extension = address_extension
@@ -525,35 +553,47 @@ class UDSClient:
         rsp = self.request(0x10, bytes([session]), timeout)
         return rsp[:2] == bytes([0x50, session])
 
-    def _default_key_algo(self, seed: bytes) -> bytes:
-        """Generate a key from a seed using a basic bitwise inversion.
-
-        This simple algorithm flips all bits of the seed.  Real-world ECUs
-        use proprietary algorithms; this serves as a deterministic example
-        for testing and demonstration purposes.
-        """
-
-        return bytes((b ^ 0xFF) & 0xFF for b in seed)
-
     def security_access(
         self, level: int, key: "bytes | None" = None, timeout: float = 1.0
     ) -> bool:
         """Request security access at ``level``.
 
         If ``key`` is ``None`` the key is derived from the ECU-provided seed
-        using ``key_algo`` passed at construction time or a default
-        inversion-based algorithm.
+        using ``key_algo`` specified at construction or via configuration.
+        ``key_algo`` may be a callable or a ``module:attr`` string which is
+        imported dynamically.
+
+        Raises
+        ------
+        ISOTransportError
+            If a negative response is received or the response format is
+            unexpected.
         """
 
         rsp = self.request(0x27, bytes([level * 2 - 1]), timeout)
-        if not rsp or rsp[0] != 0x67:
-            return False
+        if len(rsp) < 2:
+            raise ISOTransportError("Invalid seed response")
+        if rsp[0] == 0x7F:
+            code = rsp[2] if len(rsp) > 2 else 0
+            raise ISOTransportError(
+                f"Security seed request denied (NRC 0x{code:02X})"
+            )
+        if rsp[0] != 0x67 or rsp[1] != level * 2 - 1:
+            raise ISOTransportError("Unexpected seed response")
         seed = rsp[2:]
         if key is None:
-            algo = self._key_algo or self._default_key_algo
-            key = algo(seed)
+            key = self._key_algo(seed)
         rsp2 = self.request(0x27, bytes([level * 2]) + key, timeout)
-        return rsp2[:2] == bytes([0x67, level * 2])
+        if len(rsp2) < 2:
+            raise ISOTransportError("Invalid key response")
+        if rsp2[0] == 0x7F:
+            code = rsp2[2] if len(rsp2) > 2 else 0
+            raise ISOTransportError(
+                f"Security access denied (NRC 0x{code:02X})"
+            )
+        if rsp2[:2] != bytes([0x67, level * 2]):
+            raise ISOTransportError("Unexpected key response")
+        return True
 
     def read_dtc_by_status_mask(self, mask: int = 0xFF, timeout: float = 1.0) -> bytes:
         return self.request(0x19, bytes([0x02, mask]), timeout)

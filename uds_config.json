@@ -16,7 +16,7 @@
     "target_address": 16,
     "address_extension": null,
     "session": 3,
-    "security": { "level": 1, "key": null },
+    "security": { "level": 1, "key": null, "algorithm": null },
     "flow_control": { "block_size": 1, "st_min_ms": 1 },
     "dtcs": {
       "P058D": {

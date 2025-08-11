@@ -116,7 +116,9 @@ Example `vcu_security_patch.json`:
 ```
 
 A sample UDS configuration is provided in `uds_config.json` and can be passed
-with `--config` to enable diagnostic trouble code decoding.
+with `--config` to enable diagnostic trouble code decoding.  The security block
+supports an optional ``algorithm`` entry referencing a callable or
+``module:attr`` string used to derive the access key.
 
 To troubleshoot ISO-TP segmentation, ``UDSClient`` supports standard Python
 logging. Create a logger and pass it to the client to view debug output:
