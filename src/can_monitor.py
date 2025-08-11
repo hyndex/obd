@@ -606,14 +606,39 @@ def main(argv: Optional[list[str]] = None) -> int:
     else:
         logger.info("DBC loaded with %d messages", len(db.messages))
 
-    # bring up the CAN interface
-    setup_interface(args.interface, args.bitrate, args.listen_only)
+    max_failures = 3
+    failure_count = 0
+
+    def setup_with_counter() -> bool:
+        nonlocal failure_count
+        try:
+            setup_interface(args.interface, args.bitrate, args.listen_only)
+        except Exception as exc:  # pragma: no cover - log and count
+            failure_count += 1
+            logger.error("Failed to set up CAN interface: %s", exc)
+            return False
+        else:
+            if failure_count > 0:
+                logger.info("CAN interface reset and up")
+            failure_count = 0
+            return True
+
+    delay = 1.0
+    while not setup_with_counter():
+        if failure_count >= max_failures:
+            logger.fatal(
+                "Exceeded maximum consecutive CAN errors (%d); exiting", max_failures
+            )
+            return 1
+        time.sleep(delay)
+        delay = min(delay * 2, 30.0)
+        record_restart()
+    delay = 1.0
 
     if can is None:
         logger.error("python-can is required but not installed")
         return 1
 
-    delay = 1.0
     while True:
         try:
             with can.interface.Bus(
@@ -689,20 +714,52 @@ def main(argv: Optional[list[str]] = None) -> int:
         except can.CanError as exc:
             record_bus_error()
             logger.error("CAN error: %s. Restarting interface...", exc)
+            failure_count += 1
+            if failure_count >= max_failures:
+                logger.fatal(
+                    "Exceeded maximum consecutive CAN errors (%d); exiting",
+                    max_failures,
+                )
+                return 1
             time.sleep(delay)
             delay = min(delay * 2, 30.0)
             record_restart()
-            setup_interface(args.interface, args.bitrate, args.listen_only)
+            while not setup_with_counter():
+                if failure_count >= max_failures:
+                    logger.fatal(
+                        "Exceeded maximum consecutive CAN errors (%d); exiting",
+                        max_failures,
+                    )
+                    return 1
+                time.sleep(delay)
+                delay = min(delay * 2, 30.0)
+                record_restart()
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             break
         except Exception as exc:
             record_bus_error()
             logger.exception("Unexpected error: %s", exc)
+            failure_count += 1
+            if failure_count >= max_failures:
+                logger.fatal(
+                    "Exceeded maximum consecutive CAN errors (%d); exiting",
+                    max_failures,
+                )
+                return 1
             time.sleep(delay)
             delay = min(delay * 2, 30.0)
             record_restart()
-            setup_interface(args.interface, args.bitrate, args.listen_only)
+            while not setup_with_counter():
+                if failure_count >= max_failures:
+                    logger.fatal(
+                        "Exceeded maximum consecutive CAN errors (%d); exiting",
+                        max_failures,
+                    )
+                    return 1
+                time.sleep(delay)
+                delay = min(delay * 2, 30.0)
+                record_restart()
 
     return 0
 

@@ -14,7 +14,13 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from can_monitor import load_dbc, load_opendbc_dbs, monitor, apply_patches  # noqa: E402
+from can_monitor import (
+    load_dbc,
+    load_opendbc_dbs,
+    monitor,
+    apply_patches,
+    main,
+)  # noqa: E402
 from metrics import get_metrics, reset_metrics  # noqa: E402
 
 if not hasattr(can.bus.BusState, "BUS_OFF"):
@@ -693,3 +699,28 @@ def test_uds_dtc_alert_address_extension(log_setup, bus_factory):
     assert "DTC P20F9" in contents
     assert sent and sent[0].data[0] == 0x99
     assert not sent[0].is_extended_id
+
+
+def test_main_logs_reset_after_setup_failure(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    log_file = tmp_path / "can.log"
+    with patch(
+        "can_monitor.setup_interface", side_effect=[RuntimeError("boom"), None]
+    ), patch("can_monitor.monitor", side_effect=KeyboardInterrupt), patch(
+        "can_monitor.can.interface.Bus"
+    ) as bus_cls, patch("time.sleep"):
+        bus_cls.return_value.__enter__.return_value = object()
+        ret = main(["--log", str(log_file)])
+    assert ret == 0
+    assert "CAN interface reset and up" in caplog.text
+
+
+def test_main_exits_after_max_failures(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    log_file = tmp_path / "can.log"
+    with patch("can_monitor.setup_interface", side_effect=RuntimeError("boom")), patch(
+        "time.sleep"
+    ):
+        ret = main(["--log", str(log_file)])
+    assert ret == 1
+    assert "Exceeded maximum consecutive CAN errors" in caplog.text
