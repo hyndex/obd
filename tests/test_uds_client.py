@@ -307,7 +307,7 @@ def test_receive_wait_and_resume(monkeypatch):
     bus = can.interface.Bus(
         bustype="virtual", bitrate=500000, receive_own_messages=True
     )
-    client = UDSClient(bus, 0x7E0, 0x7E8)
+    client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)
 
     ff = can.Message(
         arbitration_id=0x7E8,
@@ -347,6 +347,44 @@ def test_receive_wait_and_resume(monkeypatch):
     assert payload == bytes(range(10))
     fc_frames = [m for m in sent if (m.data[0] >> 4) == 0x3]
     assert [f.data[0] for f in fc_frames] == [0x31, 0x30]
+
+
+def test_receive_wait_overflow(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=1, wft_max=1)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x12, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 6, 7, 8, 9, 10, 11, 12]),
+        is_extended_id=False,
+    )
+
+    responses = [ff, cf]
+
+    def fake_recv(timeout):
+        if responses:
+            return responses.pop(0)
+        return None
+
+    sent: list[can.Message] = []
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    client.pause_rx()
+    with pytest.raises(ISOTransportError, match="Flow Control WAIT"):
+        client.receive(timeout=1.0)
+
+    fc_waits = [m for m in sent if (m.data[0] >> 4) == 0x3]
+    assert len(fc_waits) == 1
+    assert (fc_waits[0].data[0] & 0x0F) == 1
 
 
 def test_receive_overflow(monkeypatch):
@@ -564,7 +602,7 @@ def test_send_wait_then_cts(monkeypatch, caplog):
     )
     test_logger = logging.getLogger("uds_wait")
     test_logger.setLevel(logging.DEBUG)
-    client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger)
+    client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger, wft_max=1)
 
     sent: list[can.Message] = []
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
@@ -608,7 +646,7 @@ def test_send_wait_timeout(monkeypatch, caplog):
     )
     test_logger = logging.getLogger("uds_wait_timeout")
     test_logger.setLevel(logging.DEBUG)
-    client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger)
+    client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger, wft_max=1)
 
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
 
@@ -648,6 +686,34 @@ def test_send_wait_timeout(monkeypatch, caplog):
     assert any("No Flow Control frame received" in r.message for r in caplog.records)
 
 
+def test_send_wait_overflow(monkeypatch):
+    bus = can.interface.Bus(
+        bustype="virtual", bitrate=500000, receive_own_messages=True
+    )
+    client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    fc_wait = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x31, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+
+    calls = {"count": 0}
+
+    def fake_recv(timeout):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            return fc_wait
+        return None
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    with pytest.raises(ISOTransportError, match="Flow Control WAIT"):
+        client.send(0x22, bytes(range(10)))
+
+
 def test_send_flow_control_overflow(monkeypatch, caplog):
     bus = can.interface.Bus(
         bustype="virtual", bitrate=500000, receive_own_messages=True
@@ -670,4 +736,3 @@ def test_send_flow_control_overflow(monkeypatch, caplog):
             client.send(0x22, bytes(range(10)))
 
     assert any("Flow control overflow" in r.message for r in caplog.records)
-

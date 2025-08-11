@@ -85,6 +85,9 @@ class UDSClient:
     rx_st_min: int, optional
         Minimum separation time in milliseconds to advertise in flow
         control frames.
+    wft_max: int, optional
+        Maximum number of consecutive Flow Control WAIT frames permitted
+        before aborting.  Default ``0`` per ISO-15765-2.
         key_algo: callable or ``module:attr`` string, optional
         Function applied to the received seed to generate the security
         access key. When ``None`` a default inversion-based algorithm is
@@ -122,6 +125,7 @@ class UDSClient:
         is_extended_id: bool = False,
         rx_block_size: int = 0,
         rx_st_min: int = 0,
+        wft_max: int = 0,
         key_algo: "Callable[[bytes], bytes] | str | None" = None,
         source_address: "int | None" = None,
         target_address: "int | None" = None,
@@ -138,6 +142,7 @@ class UDSClient:
         self.is_extended_id = is_extended_id
         self.rx_block_size = rx_block_size
         self.rx_st_min = rx_st_min
+        self.wft_max = wft_max
         self._key_algo = _load_key_algo(key_algo)
         self.source_address = source_address
         self.target_address = target_address
@@ -226,6 +231,7 @@ class UDSClient:
             # wait for flow control
             self.logger.debug("Waiting for Flow Control frame")
             elapsed = 0.0
+            wait_count = 0
             while True:
                 remaining = fc_timeout - elapsed
                 if remaining <= 0:
@@ -256,8 +262,13 @@ class UDSClient:
                         block_size,
                         st_delay,
                     )
+                    wait_count = 0
                     break
-                self.logger.debug("Flow Control WAIT received")
+                wait_count += 1
+                self.logger.debug("Flow Control WAIT received (%d)", wait_count)
+                if wait_count > self.wft_max:
+                    self.logger.debug("Flow control WAIT limit exceeded")
+                    raise ISOTransportError("Too many Flow Control WAIT frames")
             seq = 1
             offset = first_len
             sent_in_block = 0
@@ -299,9 +310,14 @@ class UDSClient:
                                 block_size,
                                 st_delay,
                             )
+                            wait_count = 0
                             sent_in_block = 0
                             break
-                        self.logger.debug("Flow Control WAIT received")
+                        wait_count += 1
+                        self.logger.debug("Flow Control WAIT received (%d)", wait_count)
+                        if wait_count > self.wft_max:
+                            self.logger.debug("Flow control WAIT limit exceeded")
+                            raise ISOTransportError("Too many Flow Control WAIT frames")
                 chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
                     cf_data = (
@@ -387,6 +403,7 @@ class UDSClient:
             "next_seq": 0,
             "bs": 0,
         }
+        wait_count = 0
         start = time.monotonic()
         while True:
             remaining = timeout - (time.monotonic() - start)
@@ -438,6 +455,13 @@ class UDSClient:
                 state["bs"] = 0
                 if self.t_data and self.t_data.som_ind:
                     self.t_data.som_ind()
+                if self._rx_fc_status == 1:
+                    wait_count += 1
+                    if wait_count > self.wft_max:
+                        self.logger.debug("Flow control WAIT limit exceeded")
+                        raise ISOTransportError("Too many Flow Control WAIT frames")
+                else:
+                    wait_count = 0
                 self._send_fc(status=self._rx_fc_status)
                 self.logger.debug("Received First Frame: total_len=%d", total_len)
                 continue
@@ -468,6 +492,13 @@ class UDSClient:
                         self.t_data.ind(payload)
                     return payload
                 if self.rx_block_size > 0 and state["bs"] >= self.rx_block_size:
+                    if self._rx_fc_status == 1:
+                        wait_count += 1
+                        if wait_count > self.wft_max:
+                            self.logger.debug("Flow control WAIT limit exceeded")
+                            raise ISOTransportError("Too many Flow Control WAIT frames")
+                    else:
+                        wait_count = 0
                     self._send_fc(status=self._rx_fc_status)
                     state["bs"] = 0
                 continue
@@ -575,9 +606,7 @@ class UDSClient:
             raise ISOTransportError("Invalid seed response")
         if rsp[0] == 0x7F:
             code = rsp[2] if len(rsp) > 2 else 0
-            raise ISOTransportError(
-                f"Security seed request denied (NRC 0x{code:02X})"
-            )
+            raise ISOTransportError(f"Security seed request denied (NRC 0x{code:02X})")
         if rsp[0] != 0x67 or rsp[1] != level * 2 - 1:
             raise ISOTransportError("Unexpected seed response")
         seed = rsp[2:]
@@ -588,9 +617,7 @@ class UDSClient:
             raise ISOTransportError("Invalid key response")
         if rsp2[0] == 0x7F:
             code = rsp2[2] if len(rsp2) > 2 else 0
-            raise ISOTransportError(
-                f"Security access denied (NRC 0x{code:02X})"
-            )
+            raise ISOTransportError(f"Security access denied (NRC 0x{code:02X})")
         if rsp2[:2] != bytes([0x67, level * 2]):
             raise ISOTransportError("Unexpected key response")
         return True
