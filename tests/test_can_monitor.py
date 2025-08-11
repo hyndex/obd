@@ -655,3 +655,47 @@ def test_uds_dtc_alert_address_extension(log_setup, bus_factory):
     assert sent and sent[0].data[0] == 0x99
     assert not sent[0].is_extended_id
 
+
+def test_uds_only_suppresses_obd_logs(log_setup, bus_factory):
+    logger, log_file = log_setup
+    bus = bus_factory(bitrate=500000)
+    uds_cfg = {"ecu_request_id": 0x7E0, "ecu_response_id": 0x7E8}
+
+    uds_msg = can.Message(
+        arbitration_id=uds_cfg["ecu_response_id"],
+        is_extended_id=False,
+        data=bytes([0x03, 0x7F, 0x10, 0x11, 0, 0, 0, 0]),
+    )
+    normal_msg = can.Message(
+        arbitration_id=0x123,
+        is_extended_id=False,
+        data=bytes([1, 2, 3, 4, 5, 6, 7, 8]),
+    )
+    bus.send(uds_msg)
+    bus.send(normal_msg)
+
+    orig_recv = bus.recv
+    calls = 0
+
+    def fake_recv(timeout=1.0):
+        nonlocal calls
+        if calls < 2:
+            calls += 1
+            return orig_recv(timeout)
+        raise can.CanError("stop")
+
+    with pytest.raises(can.CanError):
+        with patch.object(bus, "recv", side_effect=fake_recv):
+            monitor(
+                bus,
+                None,
+                logger,
+                print_raw=True,
+                uds_config=uds_cfg,
+                uds_only=True,
+            )
+
+    contents = log_file.read_text()
+    assert "UDS Negative Response" in contents
+    assert f"id=0x{normal_msg.arbitration_id:03X}" not in contents
+

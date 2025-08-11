@@ -80,6 +80,7 @@ Additional options:
 - `--log-level DEBUG` – increase verbosity.
 - `--listen-only` – avoid transmitting frames.
 - `--print-raw` – include raw CAN payloads in the log.
+- `--uds-only` – suppress normal CAN frame logs and print only UDS output.
 
 - `--config settings.json` – load options from a JSON file (`log_level`, startup
   sequence, etc.).
