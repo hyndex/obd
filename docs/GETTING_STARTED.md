@@ -108,6 +108,23 @@ Run the monitor with the configuration:
 python -m can_monitor --interface can0 --bitrate 250000 --config uds_config.json
 ```
 
+### Testing Without Hardware
+
+The `python-can` library includes a virtual interface that simulates a CAN bus.
+This allows exercising the monitor and diagnostic tools without connecting to a
+vehicle:
+
+```python
+import can
+
+with can.interface.Bus(interface="virtual", bitrate=500000, receive_own_messages=True) as bus:
+    # interact with the bus as usual
+    ...
+```
+
+The `interface` argument supersedes the deprecated `bustype` parameter found in
+older examples.
+
 When `--print-raw` is supplied, the log records the raw CAN payload for each
 frame and, when decoding succeeds, the decoded signal dictionary.  When decoding
 fails, the log includes a message and the metrics counter `decoding_failures` is

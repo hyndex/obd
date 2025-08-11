@@ -65,7 +65,7 @@ def _run_server(server: HTTPServer) -> None:
 
 
 @pytest.mark.parametrize("fmt", ["json", "csv"])
-def test_http_transport_formats(fmt, log_setup):
+def test_http_transport_formats(fmt, log_setup, bus_factory):
     logger, _ = log_setup
     db = load_dbc(dbc_path)
 
@@ -79,9 +79,7 @@ def test_http_transport_formats(fmt, log_setup):
     headers = {"Content-Type": "application/json" if fmt == "json" else "text/csv"}
     transport = HTTPTransport(url, headers=headers, retries=1, delay=0)
 
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory()
     msg = can.Message(
         arbitration_id=db.messages[0].frame_id,
         is_extended_id=True,
@@ -122,7 +120,7 @@ def test_http_transport_formats(fmt, log_setup):
         assert payload.strip() == expected
 
 
-def test_http_transport_retry(log_setup):
+def test_http_transport_retry(log_setup, bus_factory):
     logger, _ = log_setup
     db = load_dbc(dbc_path)
 
@@ -137,9 +135,7 @@ def test_http_transport_retry(log_setup):
         url, headers={"Content-Type": "application/json"}, retries=2, delay=0
     )
 
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory()
     msg = can.Message(
         arbitration_id=db.messages[0].frame_id,
         is_extended_id=True,
