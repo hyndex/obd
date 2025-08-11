@@ -260,9 +260,7 @@ def _handle_uds_frame(
         state["next_seq"] = 1
         state["bs_count"] = 0
         if ecu_req_id is not None:
-            fc_data = bytes(
-                [0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]
-            )
+            fc_data = bytes([0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0])
             if addr_ext is not None:
                 fc_data = bytes(
                     [addr_ext, 0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0]
@@ -277,7 +275,9 @@ def _handle_uds_frame(
     if frame_type == 0x2 and state.get("expected", 0) > 0:  # consecutive frame
         seq = pci & 0x0F
         if seq != state.get("next_seq"):
-            logger.warning("Unexpected CF sequence: got %d expected %d", seq, state.get("next_seq"))
+            logger.warning(
+                "Unexpected CF sequence: got %d expected %d", seq, state.get("next_seq")
+            )
             state["payload"] = bytearray()
             state["expected"] = 0
             return True
@@ -295,9 +295,7 @@ def _handle_uds_frame(
             state.pop("bs_count", None)
         elif block_size > 0 and state["bs_count"] >= block_size:
             if ecu_req_id is not None:
-                fc_data = bytes(
-                    [0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0]
-                )
+                fc_data = bytes([0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0, 0])
                 if addr_ext is not None:
                     fc_data = bytes(
                         [addr_ext, 0x30, block_size & 0xFF, st_min & 0xFF, 0, 0, 0, 0]
@@ -313,6 +311,56 @@ def _handle_uds_frame(
     return False
 
 
+def _sequence_loop(
+    bus: "can.BusABC",
+    sequence: list[dict[str, Any]],
+    interval_ms: int,
+    uds_config: Optional[dict[str, Any]],
+    logger: logging.Logger,
+    stop_event: threading.Event,
+) -> None:
+    """Periodically send configured frames and handle responses."""
+    block = uds_config.get("flow_control", {}).get("block_size", 0) if uds_config else 0
+    st_min = uds_config.get("flow_control", {}).get("st_min_ms", 0) if uds_config else 0
+    while not stop_event.is_set():
+        start = time.time()
+        for step in sequence:
+            msg = can.Message(
+                arbitration_id=step["can_id"],
+                data=bytes.fromhex(step["payload"]),
+                is_extended_id=bool(step.get("is_extended_id", step["can_id"] > 0x7FF)),
+            )
+            bus.send(msg)
+            resp_id = step.get("response_id")
+            if resp_id is not None:
+                timeout = step.get("timeout_ms", 100) / 1000
+                end_time = time.time() + timeout
+                state = {"expected": 0, "payload": bytearray()}
+                while time.time() < end_time and not stop_event.is_set():
+                    remaining = end_time - time.time()
+                    rsp = bus.recv(timeout=remaining)
+                    if not rsp or rsp.arbitration_id != resp_id:
+                        continue
+                    if (
+                        _handle_uds_frame(
+                            bus,
+                            rsp,
+                            state,
+                            step["can_id"],
+                            block,
+                            st_min,
+                            uds_config or {},
+                            logger,
+                        )
+                        and state.get("expected", 0) <= 0
+                    ):
+                        break
+        elapsed = (time.time() - start) * 1000
+        wait_ms = interval_ms - elapsed
+        if wait_ms > 0:
+            stop_event.wait(wait_ms / 1000)
+
+
 def monitor(
     bus: "can.BusABC",
     db: Optional[Database],
@@ -323,6 +371,8 @@ def monitor(
     print_raw: bool = False,
     fallback_dbs: Optional[list[Database]] = None,
     uds_config: Optional[dict[str, Any]] = None,
+    sequence: Optional[list[dict[str, Any]]] = None,
+    interval_ms: int = 500,
 ) -> None:
     send_queue: queue.Queue[str] | None = None
     if serializer and transport:
@@ -346,6 +396,16 @@ def monitor(
             return getattr(b, "state", None) == can.bus.BusState.BUS_OFF
         except Exception:
             return False
+
+    seq_thread: threading.Thread | None = None
+    seq_stop = threading.Event()
+    if sequence:
+        seq_thread = threading.Thread(
+            target=_sequence_loop,
+            args=(bus, sequence, interval_ms, uds_config, logger, seq_stop),
+            daemon=True,
+        )
+        seq_thread.start()
 
     missing_ids: set[int] = set()
 
@@ -462,6 +522,9 @@ def monitor(
     finally:
         if send_queue is not None:
             send_queue.join()
+        if seq_thread is not None:
+            seq_stop.set()
+            seq_thread.join()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -511,6 +574,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     logger = logging.getLogger(__name__)
 
     uds_cfg = config.get("uds")
+    sequence_cfg = config.get("sequence")
+    interval_ms = config.get("interval_ms", 500)
 
     dbc_path = Path(__file__).with_name("OBD.dbc")
     db = load_dbc(str(dbc_path))
@@ -546,10 +611,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                             uds_cfg["ecu_request_id"],
                             uds_cfg["ecu_response_id"],
                             is_extended_id=uds_cfg.get("is_extended_id", False),
-                            rx_block_size=uds_cfg.get("flow_control", {})
-                            .get("block_size", 0),
-                            rx_st_min=uds_cfg.get("flow_control", {})
-                            .get("st_min_ms", 0),
+                            rx_block_size=uds_cfg.get("flow_control", {}).get(
+                                "block_size", 0
+                            ),
+                            rx_st_min=uds_cfg.get("flow_control", {}).get(
+                                "st_min_ms", 0
+                            ),
                             source_address=uds_cfg.get("source_address"),
                             target_address=uds_cfg.get("target_address"),
                             address_extension=uds_cfg.get("address_extension"),
@@ -564,15 +631,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                         level = sec_cfg.get("level")
                         if level:
                             key_hex = sec_cfg.get("key")
-                            key = bytes.fromhex(key_hex) if isinstance(key_hex, str) else None
+                            key = (
+                                bytes.fromhex(key_hex)
+                                if isinstance(key_hex, str)
+                                else None
+                            )
                             if client.security_access(level, key):
-                                logger.info(
-                                    "UDS security level %s unlocked", level
-                                )
+                                logger.info("UDS security level %s unlocked", level)
                             else:
-                                logger.warning(
-                                    "UDS security level %s denied", level
-                                )
+                                logger.warning("UDS security level %s denied", level)
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)
                 if db is None and not fallback_dbs:
@@ -584,6 +651,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print_raw=args.print_raw,
                     fallback_dbs=fallback_dbs,
                     uds_config=uds_cfg,
+                    sequence=sequence_cfg,
+                    interval_ms=interval_ms,
                 )
                 delay = 1.0
         except can.CanError as exc:
