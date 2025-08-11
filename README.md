@@ -177,6 +177,9 @@ client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=1, rx_st_min=20)
 
 # Protect against oversized responses
 client = UDSClient(bus, 0x7E0, 0x7E8, max_rx_size=1024)
+
+# Permit a single Flow Control WAIT before aborting
+client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)
 ```
 
 Equivalent settings may be supplied in the JSON configuration:
