@@ -2,9 +2,10 @@
 """CAN bus monitor for SocketCAN interfaces.
 
 This module sets up a SocketCAN interface, loads a DBC file, and
-continuously logs raw and decoded CAN messages.  It includes support
-for listen-only mode on modern python-can versions and tolerates removal
-of the BUS_OFF enum, preventing controller lockouts.
+continuously logs raw and decoded CAN messages.  Configuring the
+interface requires root privileges or the ``CAP_NET_ADMIN`` capability.
+It includes support for listen-only mode on modern python-can versions
+and tolerates removal of the BUS_OFF enum, preventing controller lockouts.
 """
 
 from __future__ import annotations
