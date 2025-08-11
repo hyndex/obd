@@ -45,6 +45,9 @@ except ImportError:
     Database = None  # type: ignore
 
 
+uds_locked_out = False
+
+
 def apply_patches(bus: "can.BusABC", patches: dict[str, Any]) -> None:
     """Send one-shot frames defined in configuration."""
     for name, p in patches.items():
@@ -186,6 +189,10 @@ def _process_uds_payload(
             nrc,
             desc,
         )
+        if nrc in (0x36, 0x37):
+            state["uds_locked_out"] = True
+            global uds_locked_out
+            uds_locked_out = True
         if nrc == 0x78:
             # signal to the caller that a final response is pending
             state["pending"] = True
@@ -607,6 +614,7 @@ def monitor(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    global uds_locked_out
     parser = argparse.ArgumentParser(
         description="Monitor a SocketCAN bus and decode messages"
     )
@@ -744,13 +752,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 logger.warning("UDS session %s request failed", sess)
                         sec_cfg = uds_cfg.get("security") or {}
                         level = sec_cfg.get("level")
-                        if level:
-                            key_hex = sec_cfg.get("key")
-                            key = (
-                                bytes.fromhex(key_hex)
-                                if isinstance(key_hex, str)
-                                else None
-                            )
+                        if level is not None and not uds_locked_out:
+                            key_cfg = sec_cfg.get("key")
+                            key = None
+                            if isinstance(key_cfg, str):
+                                key = bytes.fromhex(key_cfg)
+                            elif isinstance(key_cfg, list):
+                                key = bytes(int(b) & 0xFF for b in key_cfg)
                             try:
                                 client.security_access(level, key)
                                 logger.info("UDS security level %s unlocked", level)
@@ -758,6 +766,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 logger.warning(
                                     "UDS security level %s denied: %s", level, exc
                                 )
+                                if any(code in str(exc) for code in ("0x36", "0x37")):
+                                    uds_locked_out = True
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)
                 if db is None and not fallback_dbs:
