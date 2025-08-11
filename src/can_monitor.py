@@ -198,29 +198,90 @@ def _process_uds_payload(
         # availability mask, followed by repeated <DTC+status> records.
         entries = payload[3:]
         dtc_count = len(entries) // 4
+
+        seen_unknown = state.setdefault("seen_unknown_dtcs", set())
+        active_alerts = state.setdefault("active_alerts", set())
+        parsed: list[dict[str, Any]] = []
+        current_codes: set[str] = set()
+        current_alerts: set[str] = set()
+
         for i in range(dtc_count):
             start = i * 4
             code = _convert_to_pcode(entries[start : start + 3])  # noqa: E203
+            if code == "P0000":
+                continue
             info = uds_config.get("dtcs", {}).get(code)
             if info:
                 desc = info.get("description", "")
                 severity = info.get("severity", "INFO")
                 component = info.get("component", "Unknown")
                 alert = info.get("alert", False) or severity.upper() == "CRITICAL"
+                known = True
             else:
                 desc = "Unknown DTC"
                 severity = "UNKNOWN"
                 component = "Unknown"
                 alert = False
-            logger.info(
-                "DTC %s (%s): %s [Severity: %s]",
-                code,
-                component,
-                desc,
-                severity,
+                known = False
+            parsed.append(
+                {
+                    "code": code,
+                    "desc": desc,
+                    "severity": severity,
+                    "component": component,
+                    "alert": alert,
+                    "known": known,
+                }
             )
+            current_codes.add(code)
             if alert:
+                current_alerts.add(code)
+
+        last_codes = state.get("last_dtcs")
+        if last_codes == current_codes:
+            logger.debug("DTC set unchanged (%d codes)", len(current_codes))
+            return
+        state["last_dtcs"] = current_codes
+
+        for cleared in active_alerts - current_alerts:
+            active_alerts.remove(cleared)
+
+        for entry in parsed:
+            code = entry["code"]
+            desc = entry["desc"]
+            severity = entry["severity"]
+            component = entry["component"]
+            alert = entry["alert"]
+            known = entry["known"]
+            if not known:
+                if code in seen_unknown:
+                    logger.debug(
+                        "DTC %s (%s): %s [Severity: %s]",
+                        code,
+                        component,
+                        desc,
+                        severity,
+                    )
+                else:
+                    seen_unknown.add(code)
+                    logger.info(
+                        "DTC %s (%s): %s [Severity: %s]",
+                        code,
+                        component,
+                        desc,
+                        severity,
+                    )
+            else:
+                logger.info(
+                    "DTC %s (%s): %s [Severity: %s]",
+                    code,
+                    component,
+                    desc,
+                    severity,
+                )
+            if alert and code not in active_alerts:
                 logger.error("*** ALERT: Critical DTC %s detected - %s ***", code, desc)
+                active_alerts.add(code)
 
 
 def _handle_uds_frame(
@@ -329,6 +390,7 @@ def _sequence_loop(
     """Periodically send configured frames and handle responses."""
     block = uds_config.get("flow_control", {}).get("block_size", 0) if uds_config else 0
     st_min = uds_config.get("flow_control", {}).get("st_min_ms", 0) if uds_config else 0
+    state = {"expected": 0, "payload": bytearray()}
     while not stop_event.is_set():
         start = time.time()
         for step in sequence:
@@ -342,7 +404,8 @@ def _sequence_loop(
             if resp_id is not None:
                 timeout = step.get("timeout_ms", 100) / 1000
                 end_time = time.time() + timeout
-                state = {"expected": 0, "payload": bytearray()}
+                state["expected"] = 0
+                state["payload"] = bytearray()
                 while time.time() < end_time and not stop_event.is_set():
                     remaining = end_time - time.time()
                     rsp = bus.recv(timeout=remaining)
