@@ -30,6 +30,7 @@ from metrics import (
     reset_metrics,
 )
 from uds import UDSClient
+from sequence_runner import SequenceRunner
 
 try:
     import can
@@ -642,6 +643,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 logger.warning("UDS security level %s denied", level)
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)
+                seq_cfg = config.get("sequence")
+                if seq_cfg:
+                    runner = SequenceRunner(
+                        bus,
+                        seq_cfg,
+                        interval_ms=config.get("interval_ms", 500),
+                        flow_control=uds_cfg.get("flow_control") if uds_cfg else None,
+                        logger=logger,
+                    )
+                    runner.start()
                 if db is None and not fallback_dbs:
                     db, fallback_dbs = load_opendbc_dbs(bus)
                 monitor(
