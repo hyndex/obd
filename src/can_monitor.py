@@ -380,6 +380,7 @@ def monitor(
     uds_config: Optional[dict[str, Any]] = None,
     sequence: Optional[list[dict[str, Any]]] = None,
     interval_ms: int = 500,
+    log_obd: bool = True,
 ) -> None:
     send_queue: queue.Queue[str] | None = None
     if serializer and transport:
@@ -460,20 +461,24 @@ def monitor(
                     )
                 except KeyError:
                     record_decoding_failure()
-                    if msg.arbitration_id not in missing_ids:
-                        missing_ids.add(msg.arbitration_id)
-                        logger.info(
-                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
-                        )
-                    else:
-                        logger.debug(
-                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
-                        )
+                    if log_obd:
+                        if msg.arbitration_id not in missing_ids:
+                            missing_ids.add(msg.arbitration_id)
+                            logger.info(
+                                "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                            )
+                        else:
+                            logger.debug(
+                                "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                            )
                 except Exception as exc:
                     record_decoding_failure()
-                    logger.warning(
-                        "Decoding error for id=0x%s: %s", fmt % msg.arbitration_id, exc
-                    )
+                    if log_obd:
+                        logger.warning(
+                            "Decoding error for id=0x%s: %s",
+                            fmt % msg.arbitration_id,
+                            exc,
+                        )
             elif fallback_dbs:
                 for candb in fallback_dbs:
                     try:
@@ -485,30 +490,33 @@ def monitor(
                         continue
                     except Exception as exc:
                         record_decoding_failure()
-                        logger.warning(
-                            "Decoding error for id=0x%s: %s",
-                            fmt % msg.arbitration_id,
-                            exc,
-                        )
+                        if log_obd:
+                            logger.warning(
+                                "Decoding error for id=0x%s: %s",
+                                fmt % msg.arbitration_id,
+                                exc,
+                            )
                 if decoded is None:
                     record_decoding_failure()
-                    if msg.arbitration_id not in missing_ids:
-                        missing_ids.add(msg.arbitration_id)
-                        logger.info(
-                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
-                        )
-                    else:
-                        logger.debug(
-                            "No DBC entry for id=0x%s", fmt % msg.arbitration_id
-                        )
+                    if log_obd:
+                        if msg.arbitration_id not in missing_ids:
+                            missing_ids.add(msg.arbitration_id)
+                            logger.info(
+                                "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                            )
+                        else:
+                            logger.debug(
+                                "No DBC entry for id=0x%s", fmt % msg.arbitration_id
+                            )
 
-            if print_raw:
-                line = f"id=0x{fmt % msg.arbitration_id} raw={raw}"
-                if decoded is not None:
-                    line += f" decoded={decoded}"
-                logger.info(line)
-            elif decoded is not None:
-                logger.info("id=0x%s decoded=%s", fmt % msg.arbitration_id, decoded)
+            if log_obd:
+                if print_raw:
+                    line = f"id=0x{fmt % msg.arbitration_id} raw={raw}"
+                    if decoded is not None:
+                        line += f" decoded={decoded}"
+                    logger.info(line)
+                elif decoded is not None:
+                    logger.info("id=0x%s decoded=%s", fmt % msg.arbitration_id, decoded)
 
             if send_queue is not None:
                 payload = serialize_frame(
@@ -554,6 +562,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--print-raw",
         action="store_true",
         help="Print raw CAN frames alongside decoded data",
+    )
+    parser.add_argument(
+        "--uds-only",
+        action="store_true",
+        help="Only log UDS operations, suppress normal CAN frame logs",
     )
     parser.add_argument("--config", help="Path to JSON configuration file")
     parser.add_argument("--log-level", help="Logging level (e.g. INFO, DEBUG)")
@@ -669,6 +682,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     uds_config=uds_cfg,
                     sequence=sequence_cfg,
                     interval_ms=interval_ms,
+                    log_obd=not args.uds_only,
                 )
                 delay = 1.0
         except can.CanError as exc:
