@@ -29,7 +29,7 @@ from metrics import (
     record_restart,
     reset_metrics,
 )
-from uds import UDSClient
+from uds import ISOTransportError, UDSClient
 
 try:
     import can
@@ -606,6 +606,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                     apply_patches(bus, config["patches"])
                 if uds_cfg:
                     try:
+                        key_algo_spec = (
+                            uds_cfg.get("security", {}).get("algorithm")
+                            if uds_cfg
+                            else None
+                        )
                         client = UDSClient(
                             bus,
                             uds_cfg["ecu_request_id"],
@@ -617,6 +622,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                             rx_st_min=uds_cfg.get("flow_control", {}).get(
                                 "st_min_ms", 0
                             ),
+                            key_algo=key_algo_spec,
                             source_address=uds_cfg.get("source_address"),
                             target_address=uds_cfg.get("target_address"),
                             address_extension=uds_cfg.get("address_extension"),
@@ -636,10 +642,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 if isinstance(key_hex, str)
                                 else None
                             )
-                            if client.security_access(level, key):
-                                logger.info("UDS security level %s unlocked", level)
-                            else:
-                                logger.warning("UDS security level %s denied", level)
+                            try:
+                                client.security_access(level, key)
+                                logger.info(
+                                    "UDS security level %s unlocked", level
+                                )
+                            except ISOTransportError as exc:
+                                logger.warning(
+                                    "UDS security level %s denied: %s", level, exc
+                                )
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)
                 if db is None and not fallback_dbs:

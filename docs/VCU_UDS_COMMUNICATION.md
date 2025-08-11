@@ -52,9 +52,10 @@ specified number of times.  Exhausting retries aborts the UDS start‑up.
 ### Security Access
 After the session switch the client requests security level 1.  The first
 request (`06 27 01 01 01 00 00 00`) asks the VCU for a seed.  The client then
-computes the corresponding key and submits it in a follow‑up `0x27` request.  By
-default the key is the bit‑wise inversion of the seed unless a custom algorithm
-is provided.
+computes the corresponding key and submits it in a follow‑up `0x27` request.  The
+algorithm used to derive the key is pluggable: by default the seed bytes are
+bit‑wise inverted, but a custom function or ``module:attr`` string can be
+supplied in configuration under ``security.algorithm``.
 
 ```json
 {
@@ -69,7 +70,9 @@ is provided.
 ```
 
 If the VCU does not answer with a positive response (`0x67`) or the computed key
-is rejected, `security_access` returns `False` and diagnostic polling stops.
+is rejected, :meth:`security_access` raises :class:`ISOTransportError` with the
+negative response code, allowing the caller to surface a detailed error and
+abort diagnostic polling.
 
 ### Multi‑Frame Flow Control
 
