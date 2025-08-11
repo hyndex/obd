@@ -47,12 +47,10 @@ dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "OBD.dbc")
 
 
 @pytest.mark.parametrize("bitrate", [125000, 500000])
-def test_monitor_decodes_extended_ids(bitrate, log_setup):
+def test_monitor_decodes_extended_ids(bitrate, log_setup, bus_factory):
     logger, log_file = log_setup
     db = load_dbc(dbc_path)
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=bitrate, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=bitrate)
 
     msg = can.Message(
         arbitration_id=db.messages[0].frame_id,
@@ -85,12 +83,10 @@ def test_monitor_decodes_extended_ids(bitrate, log_setup):
     assert expected in contents
 
 
-def test_monitor_without_print_raw(log_setup):
+def test_monitor_without_print_raw(log_setup, bus_factory):
     logger, log_file = log_setup
     db = load_dbc(dbc_path)
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     msg = can.Message(
         arbitration_id=db.messages[0].frame_id,
@@ -121,14 +117,12 @@ def test_monitor_without_print_raw(log_setup):
     assert expected in contents
 
 
-def test_bus_off_raises_can_error(log_setup, monkeypatch):
+def test_bus_off_raises_can_error(log_setup, monkeypatch, bus_factory):
     logger, _ = log_setup
     monkeypatch.setattr(
         can.bus.BusState, "BUS_OFF", can.bus.BusState.ERROR, raising=False
     )
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
     monkeypatch.setattr(
         bus.__class__, "state", property(lambda self: can.bus.BusState.BUS_OFF)
     )
@@ -144,12 +138,10 @@ def test_bus_off_raises_can_error(log_setup, monkeypatch):
     assert get_metrics()["bus_errors"] == 1
 
 
-def test_monitor_handles_missing_dbc(log_setup):
+def test_monitor_handles_missing_dbc(log_setup, bus_factory):
     logger, log_file = log_setup
     db = None
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
     msg = can.Message(
         arbitration_id=0x18FF50E5,
         is_extended_id=True,
@@ -176,12 +168,10 @@ def test_monitor_handles_missing_dbc(log_setup):
     assert expected in contents
 
 
-def test_monitor_handles_malformed_frame(log_setup):
+def test_monitor_handles_malformed_frame(log_setup, bus_factory):
     logger, log_file = log_setup
     db = load_dbc(dbc_path)
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
     msg = can.Message(
         arbitration_id=db.messages[0].frame_id, is_extended_id=True, data=bytes([1])
     )
@@ -207,12 +197,10 @@ def test_monitor_handles_malformed_frame(log_setup):
     assert get_metrics()["decoding_failures"] == 1
 
 
-def test_monitor_continues_with_slow_transport(log_setup):
+def test_monitor_continues_with_slow_transport(log_setup, bus_factory):
     logger, _ = log_setup
     db = load_dbc(dbc_path)
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     msg = can.Message(
         arbitration_id=db.messages[0].frame_id,
@@ -267,10 +255,8 @@ def test_monitor_continues_with_slow_transport(log_setup):
     assert transport.count == 2
 
 
-def test_apply_patches_sends_and_logs(caplog):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_apply_patches_sends_and_logs(caplog, bus_factory):
+    bus = bus_factory(bitrate=500000)
     patches = {
         "demo": {
             "can_id": 0x123,
@@ -297,7 +283,7 @@ def test_load_dbc_missing_file(caplog):
     assert "DBC file not found" in caplog.text
 
 
-def test_opendbc_fallback_selects_best_dbc(tmp_path):
+def test_opendbc_fallback_selects_best_dbc(tmp_path, bus_factory):
     """Ensure opendbc fallback loads the best matching DBC."""
     header = (
         'VERSION ""\n'
@@ -352,9 +338,7 @@ def test_opendbc_fallback_selects_best_dbc(tmp_path):
 
     dummy = type("Opendbc", (), {"DBC_PATH": str(tmp_path)})
 
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
     msg = can.Message(arbitration_id=0x100, is_extended_id=False, data=bytes(8))
     bus.send(msg)
 
@@ -378,11 +362,9 @@ def test_opendbc_fallback_selects_best_dbc(tmp_path):
     assert db.get_message_by_frame_id(0x100)
 
 
-def test_uds_dtc_alert(log_setup):
+def test_uds_dtc_alert(log_setup, bus_factory):
     logger, log_file = log_setup
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     with open(Path(__file__).resolve().parents[1] / "uds_config.json") as f:
         uds_cfg = json.load(f)["uds"]
@@ -423,11 +405,9 @@ def test_uds_dtc_alert(log_setup):
     assert any(m.arbitration_id == 0x7E0 and m.data[0] == 0x30 for m in sent)
 
 
-def test_uds_multi_block_fc(log_setup):
+def test_uds_multi_block_fc(log_setup, bus_factory):
     logger, _ = log_setup
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     with open(Path(__file__).resolve().parents[1] / "uds_config.json") as f:
         uds_cfg = json.load(f)["uds"]
@@ -474,11 +454,9 @@ def test_uds_multi_block_fc(log_setup):
     assert len(fcs) == 2
 
 
-def test_uds_fc_extended_id(log_setup):
+def test_uds_fc_extended_id(log_setup, bus_factory):
     logger, _ = log_setup
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     uds_cfg = {
         "ecu_request_id": 0x18DA10F1,
@@ -524,11 +502,9 @@ def test_uds_fc_extended_id(log_setup):
     assert sent[0].data[0] == 0x30
 
 
-def test_uds_fc_address_extension(log_setup):
+def test_uds_fc_address_extension(log_setup, bus_factory):
     logger, _ = log_setup
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     uds_cfg = {
         "ecu_request_id": 0x7E0,
@@ -577,11 +553,9 @@ def test_uds_fc_address_extension(log_setup):
     assert not sent[0].is_extended_id
 
 
-def test_uds_dtc_alert_extended_id(log_setup):
+def test_uds_dtc_alert_extended_id(log_setup, bus_factory):
     logger, log_file = log_setup
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     with open(Path(__file__).resolve().parents[1] / "uds_config.json") as f:
         uds_cfg = json.load(f)["uds"]
@@ -631,11 +605,9 @@ def test_uds_dtc_alert_extended_id(log_setup):
     assert sent[0].arbitration_id == uds_cfg["ecu_request_id"]
 
 
-def test_uds_dtc_alert_address_extension(log_setup):
+def test_uds_dtc_alert_address_extension(log_setup, bus_factory):
     logger, log_file = log_setup
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+    bus = bus_factory(bitrate=500000)
 
     with open(Path(__file__).resolve().parents[1] / "uds_config.json") as f:
         uds_cfg = json.load(f)["uds"]

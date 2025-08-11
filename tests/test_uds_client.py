@@ -14,10 +14,8 @@ from uds import UDSClient, ISOTransportError  # noqa: E402
 from isotp_primitives import TDataPrimitive  # noqa: E402
 
 
-def test_send_segments_respects_flow_control(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_segments_respects_flow_control(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8, key_algo="uds:default_key_algo")
 
     sent = []
@@ -53,10 +51,8 @@ def test_send_segments_respects_flow_control(monkeypatch):
     assert sleeps and pytest.approx(sleeps[0], rel=0.1) == 0.001
 
 
-def test_send_cumulative_fc_timeout(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_cumulative_fc_timeout(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
@@ -93,10 +89,8 @@ def test_send_cumulative_fc_timeout(monkeypatch):
         client.send(0x22, data, timeout=1.0)
 
 
-def test_send_rejects_overly_large_payload(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_rejects_overly_large_payload(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     sent = []
@@ -108,10 +102,8 @@ def test_send_rejects_overly_large_payload(monkeypatch):
     assert not sent
 
 
-def test_request_handles_response_pending(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_request_handles_response_pending(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
 
@@ -136,10 +128,8 @@ def test_request_handles_response_pending(monkeypatch):
     assert payload[:2] == bytes([0x50, 0x03])
 
 
-def test_session_and_security(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_session_and_security(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     sent: list[can.Message] = []
@@ -178,10 +168,8 @@ def test_session_and_security(monkeypatch):
     assert sent[2].data[:5] == bytes([0x04, 0x27, 0x02, 0x55, 0x44])
 
 
-def test_security_access_invalid_key(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_security_access_invalid_key(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
 
@@ -202,10 +190,8 @@ def test_security_access_invalid_key(monkeypatch):
         client.security_access(1, b"\x00\x00")
 
 
-def test_security_access_negative_response(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_security_access_negative_response(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
 
@@ -220,10 +206,8 @@ def test_security_access_negative_response(monkeypatch):
         client.security_access(1, b"\x00\x00")
 
 
-def test_extended_addressing(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_extended_addressing(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8, address_extension=0x99)
 
     sent: list[can.Message] = []
@@ -243,10 +227,8 @@ def test_extended_addressing(monkeypatch):
     assert payload == bytes([0x50, 0x03])
 
 
-def test_normal_fixed_addressing(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_normal_fixed_addressing(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0, 0, source_address=0xF1, target_address=0x10)
 
     sent: list[can.Message] = []
@@ -267,10 +249,8 @@ def test_normal_fixed_addressing(monkeypatch):
     assert payload[:2] == bytes([0x7F, 0x31])
 
 
-def test_tdata_primitives(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_tdata_primitives(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     calls = []
     t_data = TDataPrimitive(
         req=lambda s, d: calls.append(("req", s, d)),
@@ -306,10 +286,8 @@ def test_tdata_primitives(monkeypatch):
     ]
 
 
-def test_receive_sequence_number_mismatch(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_receive_sequence_number_mismatch(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
@@ -331,10 +309,8 @@ def test_receive_sequence_number_mismatch(monkeypatch):
         client.receive()
 
 
-def test_receive_wait_and_resume(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_receive_wait_and_resume(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)
 
     ff = can.Message(
@@ -377,10 +353,8 @@ def test_receive_wait_and_resume(monkeypatch):
     assert [f.data[0] for f in fc_frames] == [0x31, 0x30]
 
 
-def test_receive_wait_overflow(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_receive_wait_overflow(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=1, wft_max=1)
 
     ff = can.Message(
@@ -415,10 +389,8 @@ def test_receive_wait_overflow(monkeypatch):
     assert (fc_waits[0].data[0] & 0x0F) == 1
 
 
-def test_receive_overflow(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_receive_overflow(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8, max_rx_size=4)
 
     ff = can.Message(
@@ -438,10 +410,8 @@ def test_receive_overflow(monkeypatch):
     assert fc_frames and fc_frames[0].data[0] == 0x32
 
 
-def test_receive_reset_warns_and_calls_hook(monkeypatch, caplog):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_receive_reset_warns_and_calls_hook(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
     hooks: list[str] = []
     client = UDSClient(bus, 0x7E0, 0x7E8, on_reset=lambda: hooks.append("reset"))
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
@@ -469,10 +439,8 @@ def test_receive_reset_warns_and_calls_hook(monkeypatch, caplog):
     assert any("unexpected start-of-frame" in r.message for r in caplog.records)
 
 
-def test_receive_reset_raises_with_error_on_reset(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_receive_reset_raises_with_error_on_reset(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     hooks: list[str] = []
     client = UDSClient(
         bus,
@@ -504,10 +472,8 @@ def test_receive_reset_raises_with_error_on_reset(monkeypatch):
     assert hooks == ["reset"]
 
 
-def test_request_tuple_timeouts(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_request_tuple_timeouts(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
@@ -548,10 +514,8 @@ def test_request_tuple_timeouts(monkeypatch):
         client.request(0x22, b"\x01", timeout=(1.0, 0.1))
 
 
-def test_logging_debug(monkeypatch, caplog):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_logging_debug(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
     test_logger = logging.getLogger("uds_test")
     test_logger.setLevel(logging.DEBUG)
     client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger)
@@ -572,10 +536,8 @@ def test_logging_debug(monkeypatch, caplog):
     assert any("Received Single Frame" in r.message for r in caplog.records)
 
 
-def test_request_thread_locking(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_request_thread_locking(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
     resp = can.Message(
@@ -624,10 +586,8 @@ def test_request_thread_locking(monkeypatch):
     t.join()
 
 
-def test_send_wait_then_cts(monkeypatch, caplog):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_wait_then_cts(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
     test_logger = logging.getLogger("uds_wait")
     test_logger.setLevel(logging.DEBUG)
     client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger, wft_max=1)
@@ -668,10 +628,8 @@ def test_send_wait_then_cts(monkeypatch, caplog):
     assert any("Flow Control WAIT received" in r.message for r in caplog.records)
 
 
-def test_send_wait_timeout(monkeypatch, caplog):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_wait_timeout(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
     test_logger = logging.getLogger("uds_wait_timeout")
     test_logger.setLevel(logging.DEBUG)
     client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger, wft_max=1)
@@ -714,10 +672,8 @@ def test_send_wait_timeout(monkeypatch, caplog):
     assert any("No Flow Control frame received" in r.message for r in caplog.records)
 
 
-def test_send_wait_overflow(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_wait_overflow(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)
 
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
@@ -742,10 +698,8 @@ def test_send_wait_overflow(monkeypatch):
         client.send(0x22, bytes(range(10)))
 
 
-def test_send_flow_control_overflow(monkeypatch, caplog):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_send_flow_control_overflow(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
     test_logger = logging.getLogger("uds_overflow")
     test_logger.setLevel(logging.DEBUG)
     client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger)

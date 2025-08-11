@@ -13,10 +13,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 from can_monitor import _sequence_loop  # noqa: E402
 
 
-def test_sequence_interval(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_sequence_interval(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     send_times = []
     monkeypatch.setattr(
         bus, "send", lambda msg, timeout=None: send_times.append(time.monotonic())
@@ -37,10 +35,8 @@ def test_sequence_interval(monkeypatch):
         assert pytest.approx(iv, rel=0.2) == 0.02
 
 
-def test_sequence_multiframe(monkeypatch):
-    bus = can.interface.Bus(
-        bustype="virtual", bitrate=500000, receive_own_messages=True
-    )
+def test_sequence_multiframe(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
     sent = []
     monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
     ff = can.Message(
