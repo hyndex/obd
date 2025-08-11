@@ -58,6 +58,16 @@ The utilities and tests rely on a few Python packages:
 
 Install them with `pip install -r requirements.txt`.
 
+## Privilege Requirements
+
+Configuring a SocketCAN interface requires root privileges or the
+`CAP_NET_ADMIN` capability. To grant the capability to the Python
+interpreter without running as root:
+
+```bash
+sudo setcap cap_net_admin+ep $(readlink -f $(which python3))
+```
+
 If the bundled `OBD.dbc` cannot be loaded, the CAN monitor will
 automatically fall back to the community DBC files provided by
 [`opendbc`](https://github.com/commaai/opendbc).
