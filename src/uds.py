@@ -139,8 +139,15 @@ class UDSClient:
     n_cr: float, optional
         Maximum number of seconds to wait for the next response frame before
         declaring a timeout.  This timer restarts after every received frame.
-    logger: logging.Logger, optional
+        logger: logging.Logger, optional
         Logger used for debug output.  Defaults to a module-level logger.
+    bus_lock: threading.Lock, optional
+        Lock used to serialize access to the CAN bus when shared.
+    can_fd: bool, optional
+        Use CAN FD frames with 64-byte payloads.  Default ``False``.
+    pad_byte: int, optional
+        Byte value used to pad unused space in Single, First and
+        Consecutive frames.  Defaults to ``0x00``.
     """
 
     def __init__(
@@ -165,6 +172,7 @@ class UDSClient:
         logger: logging.Logger = LOGGER,
         bus_lock: threading.Lock | None = None,
         can_fd: bool = False,
+        pad_byte: int = 0x00,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -187,6 +195,7 @@ class UDSClient:
         self._lock = threading.Lock()
         self.bus_lock = bus_lock
         self.can_fd = can_fd
+        self.pad_byte = pad_byte & 0xFF
 
         if self.source_address is not None and self.target_address is not None:
             base = 0x18DA
@@ -243,7 +252,7 @@ class UDSClient:
                     + pci
                     + payload
                 )
-                frame_data += bytes(dlc - len(frame_data))
+                frame_data += bytes([self.pad_byte]) * (dlc - len(frame_data))
                 frame = can.Message(
                     arbitration_id=self.req_id,
                     is_extended_id=self.is_extended_id,
@@ -279,7 +288,7 @@ class UDSClient:
                 + pci
                 + first_payload
             )
-            ff_data += bytes(dlc - len(ff_data))
+            ff_data += bytes([self.pad_byte]) * (dlc - len(ff_data))
             ff = can.Message(
                 arbitration_id=self.req_id,
                 is_extended_id=self.is_extended_id,
@@ -385,7 +394,7 @@ class UDSClient:
                     cf_data = bytes([self.address_extension, 0x20 | (seq & 0x0F)]) + chunk
                 else:
                     cf_data = bytes([0x20 | (seq & 0x0F)]) + chunk
-                cf_data += bytes(dlc - len(cf_data))
+                cf_data += bytes([self.pad_byte]) * (dlc - len(cf_data))
                 cf = can.Message(
                     arbitration_id=self.req_id,
                     is_extended_id=self.is_extended_id,
