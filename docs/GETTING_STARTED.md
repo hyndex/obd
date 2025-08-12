@@ -89,8 +89,8 @@ Additional options:
 ``sequence`` section issues the extended-session request, security seed/key
 exchange, DTC read and a flow-control frame.  On Raspberry Pi systems, set
 ``flow_control.st_min_ms`` to around 5–10 ms to account for scheduler jitter.
-The security block supports an optional ``algorithm`` entry referencing a
-callable or ``module:attr`` string used to derive the access key.
+The security block accepts optional ``data_record`` bytes and an ``algorithm``
+reference (callable or ``module:attr`` string) used to derive the access key.
 
 To troubleshoot ISO-TP segmentation, ``UDSClient`` supports standard Python
 logging. Create a logger and pass it to the client to view debug output:
