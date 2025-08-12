@@ -290,6 +290,49 @@ def test_normal_fixed_addressing(monkeypatch, bus_factory):
     assert payload[:2] == bytes([0x7F, 0x31])
 
 
+def test_functional_addressing_collects_multiple_responses(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(
+        bus, 0, 0, source_address=0xF1, target_address=0x33, functional=True
+    )
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    resp1 = can.Message(
+        arbitration_id=0x18DA10F1,
+        data=bytes([0x02, 0x62, 0xF1, 0, 0, 0, 0, 0]),
+        is_extended_id=True,
+    )
+    resp2 = can.Message(
+        arbitration_id=0x18DA11F1,
+        data=bytes([0x02, 0x62, 0xF2, 0, 0, 0, 0, 0]),
+        is_extended_id=True,
+    )
+    events = [(0.0, resp1), (0.0, resp2)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout: float):
+        if events:
+            delay, msg = events.pop(0)
+            now[0] += delay
+            return msg
+        now[0] += timeout
+        return None
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    client.send(0x22, b"\xF1\x90")
+    payloads = client.receive(timeout=1.0)
+
+    assert sent[0].arbitration_id == 0x18DB33F1
+    assert payloads == [bytes([0x62, 0xF1]), bytes([0x62, 0xF2])]
+
+
 def test_tdata_primitives(monkeypatch, bus_factory):
     bus = bus_factory(bitrate=500000)
     calls = []
