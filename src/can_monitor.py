@@ -46,6 +46,7 @@ except ImportError:
 
 
 uds_locked_out = False
+bus_lock = threading.Lock()
 
 
 def apply_patches(bus: "can.BusABC", patches: dict[str, Any]) -> None:
@@ -349,7 +350,8 @@ def _handle_uds_frame(
                 data=fc_data,
                 is_extended_id=bool(ecu_req_id and ecu_req_id > 0x7FF),
             )
-            bus.send(fc)
+            with bus_lock:
+                bus.send(fc)
         return True
     if frame_type == 0x2 and state.get("expected", 0) > 0:  # consecutive frame
         seq = pci & 0x0F
@@ -384,7 +386,8 @@ def _handle_uds_frame(
                     data=fc_data,
                     is_extended_id=bool(ecu_req_id and ecu_req_id > 0x7FF),
                 )
-                bus.send(fc)
+                with bus_lock:
+                    bus.send(fc)
             state["bs_count"] = 0
         return True
     return False
@@ -414,7 +417,8 @@ def _sequence_loop(
                 data=data,
                 is_extended_id=bool(step.get("is_extended_id", step["can_id"] > 0x7FF)),
             )
-            bus.send(msg)
+            with bus_lock:
+                bus.send(msg)
             resp_id = step.get("response_id")
             if resp_id is not None:
                 timeout = step.get("timeout_ms", 100) / 1000
@@ -423,7 +427,8 @@ def _sequence_loop(
                 state["payload"] = bytearray()
                 while time.time() < end_time and not stop_event.is_set():
                     remaining = end_time - time.time()
-                    rsp = bus.recv(timeout=remaining)
+                    with bus_lock:
+                        rsp = bus.recv(timeout=remaining)
                     if not rsp or rsp.arbitration_id != resp_id:
                         continue
                     if (
@@ -508,7 +513,8 @@ def monitor(
         flow_st = uds_config.get("flow_control", {}).get("st_min_ms", 0)
     try:
         while True:
-            msg = bus.recv(timeout=1.0)
+            with bus_lock:
+                msg = bus.recv(timeout=1.0)
             if msg is None:
                 if is_bus_off(bus):
                     record_bus_error()
@@ -751,6 +757,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                             source_address=uds_cfg.get("source_address"),
                             target_address=uds_cfg.get("target_address"),
                             address_extension=uds_cfg.get("address_extension"),
+                            bus_lock=bus_lock,
                         )
                         sess = uds_cfg.get("session")
                         if sess is not None:

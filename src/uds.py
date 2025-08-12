@@ -158,6 +158,7 @@ class UDSClient:
         on_reset: "Callable[[], None] | None" = None,
         error_on_reset: bool = False,
         logger: logging.Logger = LOGGER,
+        bus_lock: threading.Lock | None = None,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -177,6 +178,7 @@ class UDSClient:
         self.logger = logger
         self._rx_fc_status = 0
         self._lock = threading.Lock()
+        self.bus_lock = bus_lock
 
         if self.source_address is not None and self.target_address is not None:
             base = 0x18DA
@@ -187,6 +189,19 @@ class UDSClient:
                 (base << 16) | (self.source_address << 8) | self.target_address
             )
             self.is_extended_id = True
+
+    def _bus_send(self, msg: "can.Message", timeout: float | None = None) -> None:
+        if self.bus_lock:
+            with self.bus_lock:
+                self.bus.send(msg, timeout=timeout)
+        else:
+            self.bus.send(msg, timeout=timeout)
+
+    def _bus_recv(self, timeout: float | None = None) -> "can.Message | None":
+        if self.bus_lock:
+            with self.bus_lock:
+                return self.bus.recv(timeout)
+        return self.bus.recv(timeout)
 
     # ------------------------------------------------------------------
     # sending
@@ -220,7 +235,7 @@ class UDSClient:
                     is_extended_id=self.is_extended_id,
                     data=frame_data,
                 )
-                self.bus.send(frame, timeout=send_timeout)
+                self._bus_send(frame, timeout=send_timeout)
                 self.logger.debug("Sent Single Frame: %s", frame.data.hex())
                 if self.t_data and self.t_data.con:
                     self.t_data.con(True, None)
@@ -248,7 +263,7 @@ class UDSClient:
                 is_extended_id=self.is_extended_id,
                 data=ff_data,
             )
-            self.bus.send(ff, timeout=send_timeout)
+            self._bus_send(ff, timeout=send_timeout)
             self.logger.debug("Sent First Frame: total_len=%d", total_len)
 
             # wait for flow control
@@ -261,7 +276,7 @@ class UDSClient:
                     self.logger.error("No Flow Control frame received")
                     raise ISOTransportError("No Flow Control frame received")
                 wait_start = time.monotonic()
-                fc = self.bus.recv(remaining)
+                fc = self._bus_recv(remaining)
                 elapsed += time.monotonic() - wait_start
                 if not fc or fc.arbitration_id != self.resp_id:
                     continue
@@ -309,7 +324,7 @@ class UDSClient:
                             self.logger.error("Flow control timeout")
                             raise ISOTransportError("Flow control timeout")
                         wait_start = time.monotonic()
-                        fc = self.bus.recv(remaining)
+                        fc = self._bus_recv(remaining)
                         elapsed += time.monotonic() - wait_start
                         if not fc or fc.arbitration_id != self.resp_id:
                             continue
@@ -359,7 +374,7 @@ class UDSClient:
                     is_extended_id=self.is_extended_id,
                     data=cf_data,
                 )
-                self.bus.send(cf, timeout=send_timeout)
+                self._bus_send(cf, timeout=send_timeout)
                 self.logger.debug("Sent Consecutive Frame seq=%d", seq)
                 offset += len(chunk)
                 seq = (seq + 1) & 0x0F
@@ -402,7 +417,7 @@ class UDSClient:
             is_extended_id=self.is_extended_id,
             data=data,
         )
-        self.bus.send(fc)
+        self._bus_send(fc)
         self.logger.debug(
             "Sent Flow Control: status=%d bs=%d st_min=%d",
             status,
@@ -433,7 +448,7 @@ class UDSClient:
             if remaining <= 0:
                 self.logger.error("UDS response timeout")
                 raise ISOTransportError("UDS response timeout")
-            msg = self.bus.recv(remaining)
+            msg = self._bus_recv(remaining)
             if not msg or msg.arbitration_id != self.resp_id:
                 continue
             data = bytes(msg.data)
@@ -550,22 +565,16 @@ class UDSClient:
             send_to, recv_to = timeout
         else:
             send_to = recv_to = timeout
-        self.logger.debug(
-            "Sending service 0x%02X with payload %s", service, data.hex()
-        )
+        self.logger.debug("Sending service 0x%02X with payload %s", service, data.hex())
         self._send(service, data, send_to)
         start = time.monotonic()
         while True:
             remaining = recv_to - (time.monotonic() - start)
             rsp = self._receive(remaining)
-            self.logger.debug(
-                "Response for service 0x%02X: %s", service, rsp.hex()
-            )
+            self.logger.debug("Response for service 0x%02X: %s", service, rsp.hex())
             if len(rsp) >= 3 and rsp[0] == 0x7F and rsp[2] == 0x78:
                 # NRC 0x78: response pending, wait for final response
-                self.logger.info(
-                    "Service 0x%02X pending (NRC 0x78)", service
-                )
+                self.logger.info("Service 0x%02X pending (NRC 0x78)", service)
                 continue
             if len(rsp) >= 3 and rsp[0] == 0x7F:
                 code = rsp[2]
@@ -655,9 +664,7 @@ class UDSClient:
                 _nrc_desc(code),
             )
         else:
-            self.logger.error(
-                "Unexpected response to session change: %s", rsp.hex()
-            )
+            self.logger.error("Unexpected response to session change: %s", rsp.hex())
         return False
 
     def security_access(
