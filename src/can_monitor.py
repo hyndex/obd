@@ -428,12 +428,18 @@ def _sequence_loop(
                 if uds_locked_out and data and data[0] == 0x27:
                     logger.warning("Skipping security access due to lockout")
                     continue
+                if len(data) > 8 and not step.get("is_fd", False):
+                    logger.error(
+                        "Payload for '%s' exceeds 8 bytes", step.get("name", hex(step["can_id"]))
+                    )
+                    continue
                 msg = can.Message(
                     arbitration_id=step["can_id"],
                     data=data,
                     is_extended_id=bool(
                         step.get("is_extended_id", step["can_id"] > 0x7FF)
                     ),
+                    is_fd=step.get("is_fd", len(data) > 8),
                 )
                 with bus_lock:
                     bus.send(msg)
