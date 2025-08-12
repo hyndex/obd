@@ -592,7 +592,7 @@ def test_uds_multi_block_fc(log_setup, bus_factory):
         uds_cfg = json.load(f)["uds"]
 
     uds_cfg["flow_control"]["block_size"] = 1
-    uds_cfg["flow_control"]["st_min_ms"] = 0
+    uds_cfg["flow_control"]["st_min_ms"] = 5
 
     payload = bytes([0x59, 0x02, 0x00] + [0] * 15)
     length = len(payload)
@@ -633,6 +633,7 @@ def test_uds_multi_block_fc(log_setup, bus_factory):
 
     fcs = [m for m in sent if m.data[0] == 0x30]
     assert len(fcs) == 2
+    assert all(m.data[2] == 5 for m in fcs)
 
 
 def test_uds_fc_extended_id(log_setup, bus_factory):

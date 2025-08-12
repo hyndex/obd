@@ -114,10 +114,14 @@ diagnostic trouble code (DTC) metadata and ISO-TP flow control options.
         "component": "PS"
       }
     },
-    "flow_control": {"block_size": 0, "st_min_ms": 0}
+    "flow_control": {"block_size": 0, "st_min_ms": 5}
   }
 }
 ```
+
+On resource-constrained boards like the Raspberry Pi, a non-zero
+`st_min_ms` (typically 5–10 ms) helps account for scheduling jitter and
+ensures reliable transfers.
 
 The security `key` may also be supplied as a list of byte values:
 
@@ -190,7 +194,9 @@ Normal-fixed, mixed and extended addressing modes are supported:
 #### Flow Control Tuning
 
 The block size and minimum separation time advertised in Flow Control frames can
-be adjusted to trade throughput for bus load or apply throttling.
+be adjusted to trade throughput for bus load or apply throttling.  On
+Raspberry Pi hardware, using an `st_min_ms` of roughly 5–10 ms helps avoid
+missing consecutive frames due to OS scheduling latency.
 
 ```python
 # Maximise throughput
