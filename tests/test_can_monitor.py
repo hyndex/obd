@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import can
 import pytest
+from uds import ISOTransportError
 
 import sys
 from pathlib import Path
@@ -184,6 +185,61 @@ def test_monitor_without_print_raw(log_setup, bus_factory):
     fmt = "08X" if msg.is_extended_id else "03X"
     expected = f"id=0x{msg.arbitration_id:{fmt}} decoded={expected_decoded}"
     assert expected in contents
+
+
+def test_security_access_failure_disables_sequence(monkeypatch, tmp_path):
+    """Security access errors should set lockout and skip the sequence."""
+    config = {
+        "uds": {
+            "ecu_request_id": 1,
+            "ecu_response_id": 2,
+            "security": {"level": 1, "key": "AA"},
+        },
+        "sequence": [
+            {"name": "enter_session", "can_id": 1, "payload": "01"}
+        ],
+    }
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps(config))
+
+    captured = {}
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def change_session(self, sess):
+            return True
+
+        def security_access(self, level, key, data_record=b""):
+            raise ISOTransportError("Consecutive frame timeout")
+
+    class DummyBus:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def send(self, *args, **kwargs):
+            pass
+
+        def recv(self, *args, **kwargs):
+            return None
+
+    def fake_monitor(*args, **kwargs):
+        captured["sequence"] = kwargs.get("sequence")
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(can_monitor, "setup_interface", lambda *a, **k: None)
+    monkeypatch.setattr(can.interface, "Bus", lambda *a, **k: DummyBus())
+    monkeypatch.setattr(can_monitor, "UDSClient", DummyClient)
+    monkeypatch.setattr(can_monitor, "monitor", fake_monitor)
+    can_monitor.uds_locked_out = False
+
+    assert main(["--config", str(cfg_path), "--interface", "vcan0"]) == 0
+    assert can_monitor.uds_locked_out is True
+    assert captured["sequence"] is None
 
 
 def test_bus_off_raises_can_error(log_setup, monkeypatch, bus_factory):

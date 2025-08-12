@@ -833,8 +833,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 logger.warning(
                                     "UDS security level %s denied: %s", level, exc
                                 )
-                                if any(code in str(exc) for code in ("0x36", "0x37")):
-                                    uds_locked_out = True
+                                # When security access fails we set the global
+                                # ``uds_locked_out`` flag to avoid hammering the
+                                # ECU with further authentication attempts.  This
+                                # is done for any failure, not only explicit
+                                # lockout negative response codes, as timeouts or
+                                # unexpected responses generally indicate the ECU
+                                # will not process subsequent requests in the
+                                # current session.  Disabling the configured
+                                # request sequence prevents repeated "No
+                                # response" warnings and mirrors real-world
+                                # behaviour where the diagnostic session would be
+                                # aborted after an authentication failure.
+                                uds_locked_out = True
+                                sequence_cfg = None
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)
                 if db is None and not fallback_dbs:
