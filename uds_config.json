@@ -8,7 +8,7 @@
     "source_address": 241,
     "target_address": 16,
     "address_extension": null,
-    "flow_control": { "block_size": 1, "st_min_ms": 1 },
+    "flow_control": { "block_size": 1, "st_min_ms": 5 },
     "security": {
       "level": 1,
       "key": [255, 255],
@@ -183,7 +183,7 @@
     {
       "name": "flow_control",
       "can_id": 2024,
-      "payload": "30 01 01 00 00 00 00 00",
+      "payload": "30 01 05 00 00 00 00 00",
       "response_id": null
     }
   ],

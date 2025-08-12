@@ -52,12 +52,13 @@ abort diagnostic polling.
 
 Large responses are segmented using ISO‑TP.  The receiver advertises its
 capabilities with a Flow Control (FC) frame.  For the VCU, a CTS frame
-`30 01 01 00 00 00 00 00` permits the sender to transmit one consecutive frame at
-a time (`block_size` = 1) with a minimum separation of 1 ms (`st_min_ms` = 1).
-These defaults are configurable in the JSON file:
+`30 01 05 00 00 00 00 00` permits the sender to transmit one consecutive frame at
+a time (`block_size` = 1) with a minimum separation of 5 ms (`st_min_ms` = 5).
+On Raspberry Pi hardware, increasing `st_min_ms` to 5–10 ms helps prevent missed
+frames due to scheduling jitter. These defaults are configurable in the JSON file:
 
 ```json
-"flow_control": { "block_size": 1, "st_min_ms": 1 }
+"flow_control": { "block_size": 1, "st_min_ms": 5 }
 ```
 
 If the VCU responds with an FC status **WAIT** (0x1) transmission pauses but the
@@ -132,7 +133,7 @@ control parameters used by the monitor:
   "address_extension": null,
   "session": 3,
   "security": { "level": 1, "key": null },
-  "flow_control": { "block_size": 1, "st_min_ms": 1 },
+  "flow_control": { "block_size": 1, "st_min_ms": 5 },
   "dtcs": { ... }
 }
 ```
@@ -146,7 +147,8 @@ control parameters used by the monitor:
   instead of computing one, populate `security.key` with an 8‑byte hex string.
 * **Flow Control** – `block_size` and `st_min_ms` tune ISO‑TP reception.  Larger
   block sizes trade memory for throughput; a non‑zero `st_min_ms` throttles the
-  sender.
+  sender.  Raspberry Pi systems typically require `st_min_ms` of 5–10 ms to
+  reliably pace responses.
 * **DTC Mapping** – extend the `dtcs` dictionary with additional P‑codes as
   needed.  Each entry must include `description`, `severity` and `component`.  An
   optional `alert` flag promotes the code to a high‑priority log entry.
@@ -175,7 +177,8 @@ interacting with the VCU until restarted.
 1. **Add or modify DTCs** – edit `uds_config.json` and append new entries under
    `dtcs`.  Follow the existing schema.  Reload the monitor to apply.
 2. **Adjust flow control** – change `flow_control.block_size` or
-   `flow_control.st_min_ms` to tune throughput vs. bus load.
+   `flow_control.st_min_ms` to tune throughput vs. bus load.  When running on a
+   Raspberry Pi, values around 5–10 ms are typical.
 3. **Change security level or key** – set `security.level` and optionally provide
    a `security.key` for ECUs requiring a known key.
 4. **Alter session or CAN IDs** – modify `session`, `ecu_request_id` or
