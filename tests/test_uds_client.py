@@ -52,6 +52,47 @@ def test_send_segments_respects_flow_control(monkeypatch, bus_factory):
     assert sleeps and pytest.approx(sleeps[0], rel=0.1) == 0.001
 
 
+def test_send_single_frame_uses_pad_byte(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8, pad_byte=0xCC)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    client.send(0x22, b"\xAA\xBB")
+
+    assert len(sent) == 1
+    # first byte length, then service + data => padding starts at index 4
+    assert bytes(sent[0].data)[4:] == bytes([0xCC]) * 4
+
+
+def test_send_consecutive_frame_uses_pad_byte(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8, pad_byte=0xAA)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    fc = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x30, 1, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    fcs = [fc, fc]
+
+    def fake_recv(timeout):
+        return fcs.pop(0)
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    data = bytes(range(14))
+    client.send(0x22, data)
+
+    assert len(sent) == 3
+    # final CF carries two bytes of data -> padding begins at index 3
+    assert bytes(sent[2].data)[3:] == bytes([0xAA]) * 5
+
+
 def test_send_restarts_fc_timeout(monkeypatch, bus_factory):
     bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
