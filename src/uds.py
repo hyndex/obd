@@ -164,6 +164,7 @@ class UDSClient:
         n_cr: float = 1.0,
         logger: logging.Logger = LOGGER,
         bus_lock: threading.Lock | None = None,
+        can_fd: bool = False,
     ) -> None:
         self.bus = bus
         self.req_id = req_id
@@ -185,6 +186,7 @@ class UDSClient:
         self._rx_fc_status = 0
         self._lock = threading.Lock()
         self.bus_lock = bus_lock
+        self.can_fd = can_fd
 
         if self.source_address is not None and self.target_address is not None:
             base = 0x18DA
@@ -215,30 +217,37 @@ class UDSClient:
         self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
     ) -> bool:
         payload = bytes([service]) + data
-        if len(payload) > 0xFFF:
+        limit = 0xFFFFFFFF if self.can_fd else 0xFFF
+        if len(payload) > limit:
             self.logger.error("Payload too large: %d bytes", len(payload))
             raise ISOTransportError("Payload too large")
         if isinstance(timeout, tuple):
             fc_timeout, send_timeout = timeout
         else:
             fc_timeout = send_timeout = timeout
-        single_limit = 7 if self.address_extension is None else 6
+        dlc = 64 if self.can_fd else 8
+        addr_len = 1 if self.address_extension is not None else 0
         try:
-            if len(payload) <= single_limit:
-                pci = len(payload) & 0x0F
-                if self.address_extension is not None:
-                    frame_data = (
-                        bytes([self.address_extension, pci])
-                        + payload
-                        + bytes(single_limit - len(payload))
-                    )
+            # attempt single frame
+            if self.can_fd and len(payload) > 0x0F:
+                sf_overhead = addr_len + 2
+            else:
+                sf_overhead = addr_len + 1
+            if len(payload) <= dlc - sf_overhead:
+                if self.can_fd and len(payload) > 0x0F:
+                    pci = bytes([0x00, len(payload) & 0xFF])
                 else:
-                    frame_data = (
-                        bytes([pci]) + payload + bytes(single_limit - len(payload))
-                    )
+                    pci = bytes([len(payload) & 0xFF])
+                frame_data = (
+                    (bytes([self.address_extension]) if self.address_extension is not None else b"")
+                    + pci
+                    + payload
+                )
+                frame_data += bytes(dlc - len(frame_data))
                 frame = can.Message(
                     arbitration_id=self.req_id,
                     is_extended_id=self.is_extended_id,
+                    is_fd=self.can_fd,
                     data=frame_data,
                 )
                 self._bus_send(frame, timeout=send_timeout)
@@ -248,25 +257,33 @@ class UDSClient:
                 return True
 
             total_len = len(payload)
-            pci_high = 0x10 | ((total_len >> 8) & 0x0F)
-            pci_low = total_len & 0xFF
-            first_len = 6 if self.address_extension is None else 5
-            first_payload = payload[:first_len]
-            if self.address_extension is not None:
-                ff_data = (
-                    bytes([self.address_extension, pci_high, pci_low])
-                    + first_payload
-                    + bytes(8 - 3 - len(first_payload))
-                )
+            if total_len <= 0xFFF:
+                pci = bytes([0x10 | ((total_len >> 8) & 0x0F), total_len & 0xFF])
+                ff_overhead = addr_len + 2
             else:
-                ff_data = (
-                    bytes([pci_high, pci_low])
-                    + first_payload
-                    + bytes(8 - 2 - len(first_payload))
+                pci = bytes(
+                    [
+                        0x10,
+                        0x00,
+                        (total_len >> 24) & 0xFF,
+                        (total_len >> 16) & 0xFF,
+                        (total_len >> 8) & 0xFF,
+                        total_len & 0xFF,
+                    ]
                 )
+                ff_overhead = addr_len + 6
+            first_len = dlc - ff_overhead
+            first_payload = payload[:first_len]
+            ff_data = (
+                (bytes([self.address_extension]) if self.address_extension is not None else b"")
+                + pci
+                + first_payload
+            )
+            ff_data += bytes(dlc - len(ff_data))
             ff = can.Message(
                 arbitration_id=self.req_id,
                 is_extended_id=self.is_extended_id,
+                is_fd=self.can_fd,
                 data=ff_data,
             )
             self._bus_send(ff, timeout=send_timeout)
@@ -316,7 +333,7 @@ class UDSClient:
             seq = 1
             offset = first_len
             sent_in_block = 0
-            chunk_len = 7 if self.address_extension is None else 6
+            chunk_len = dlc - (addr_len + 1)
             while offset < len(payload):
                 if block_size != 0 and sent_in_block >= block_size:
                     self.logger.debug(
@@ -365,20 +382,14 @@ class UDSClient:
                         fc_start = time.monotonic()
                 chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
-                    cf_data = (
-                        bytes([self.address_extension, 0x20 | (seq & 0x0F)])
-                        + chunk
-                        + bytes(chunk_len - len(chunk))
-                    )
+                    cf_data = bytes([self.address_extension, 0x20 | (seq & 0x0F)]) + chunk
                 else:
-                    cf_data = (
-                        bytes([0x20 | (seq & 0x0F)])
-                        + chunk
-                        + bytes(chunk_len - len(chunk))
-                    )
+                    cf_data = bytes([0x20 | (seq & 0x0F)]) + chunk
+                cf_data += bytes(dlc - len(cf_data))
                 cf = can.Message(
                     arbitration_id=self.req_id,
                     is_extended_id=self.is_extended_id,
+                    is_fd=self.can_fd,
                     data=cf_data,
                 )
                 self._bus_send(cf, timeout=send_timeout)
@@ -402,26 +413,18 @@ class UDSClient:
     # receiving
     def _send_fc(self, status: int = 0) -> None:
         pci = 0x30 | (status & 0x0F)
+        dlc = 64 if self.can_fd else 8
         if self.address_extension is not None:
-            data = bytes(
-                [
-                    self.address_extension,
-                    pci,
-                    self.rx_block_size & 0xFF,
-                    self.rx_st_min & 0xFF,
-                    0,
-                    0,
-                    0,
-                    0,
-                ]
+            base = bytes(
+                [self.address_extension, pci, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF]
             )
         else:
-            data = bytes(
-                [pci, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF, 0, 0, 0, 0, 0]
-            )
+            base = bytes([pci, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF])
+        data = base + bytes(dlc - len(base))
         fc = can.Message(
             arbitration_id=self.req_id,
             is_extended_id=self.is_extended_id,
+            is_fd=self.can_fd,
             data=data,
         )
         self._bus_send(fc)
@@ -481,14 +484,23 @@ class UDSClient:
                 )
                 start = time.monotonic()
             if frame_type == 0x0:  # single
-                length = data[0] & 0x0F
-                payload = data[1 : 1 + length]  # noqa: E203
+                if self.can_fd and (data[0] & 0x0F) == 0 and len(data) > 1:
+                    length = data[1]
+                    payload = data[2 : 2 + length]  # noqa: E203
+                else:
+                    length = data[0] & 0x0F
+                    payload = data[1 : 1 + length]  # noqa: E203
                 self.logger.debug("Received Single Frame: len=%d", length)
                 if self.t_data and self.t_data.ind:
                     self.t_data.ind(payload)
                 return payload
             if frame_type == 0x1:  # first frame
-                total_len = ((data[0] & 0x0F) << 8) | data[1]
+                if self.can_fd and (data[0] & 0x0F) == 0:
+                    total_len = int.from_bytes(data[2:6], "big")
+                    first_payload = data[6:]
+                else:
+                    total_len = ((data[0] & 0x0F) << 8) | data[1]
+                    first_payload = data[2:]
                 if self.max_rx_size is not None and total_len > self.max_rx_size:
                     self._send_fc(status=2)
                     self.logger.error(
@@ -497,7 +509,7 @@ class UDSClient:
                         self.max_rx_size,
                     )
                     raise ISOTransportError("Response length exceeds max_rx_size")
-                state["payload"] = bytearray(data[2:])
+                state["payload"] = bytearray(first_payload)
                 state["expected"] = total_len - len(state["payload"])
                 state["next_seq"] = 1
                 state["bs"] = 0
@@ -525,9 +537,7 @@ class UDSClient:
                         seq,
                     )
                     raise ISOTransportError("Sequence number mismatch")
-                take = min(
-                    state["expected"], 7 if self.address_extension is None else 6
-                )
+                take = min(state["expected"], len(data) - 1)
                 state["payload"].extend(data[1 : 1 + take])  # noqa: E203
                 state["expected"] -= take
                 state["next_seq"] = (state["next_seq"] + 1) & 0x0F
