@@ -425,6 +425,30 @@ def test_apply_patches_sends_and_logs(caplog, bus_factory):
     assert "Patch 'demo' applied" in caplog.text
 
 
+def test_apply_patches_can_error_logs_warning(caplog, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    patches = {
+        "demo": {
+            "can_id": 0x123,
+            "payload": "01",
+            "response_id": 0x456,
+            "timeout_ms": 100,
+            "retries": 3,
+        }
+    }
+
+    with caplog.at_level(logging.WARNING):
+        with patch.object(bus, "send") as mock_send, patch.object(
+            bus, "recv", side_effect=can.CanError("boom")
+        ) as mock_recv:
+            apply_patches(bus, patches)
+
+    assert "Patch 'demo' failed" in caplog.text
+    assert "CAN error" in caplog.text
+    assert mock_send.call_count == 1
+    assert mock_recv.call_count == 1
+
+
 def test_no_cf_sequence_warning_with_concurrent_access(log_setup):
     logger, log_file = log_setup
 
