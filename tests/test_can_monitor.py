@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import uuid
+import queue
 from unittest.mock import patch
 
 import can
@@ -14,14 +15,14 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-import can_monitor
-from can_monitor import (
+import can_monitor  # noqa: E402
+from can_monitor import (  # noqa: E402
     load_dbc,
     load_opendbc_dbs,
     monitor,
     apply_patches,
     main,
-)  # noqa: E402
+)
 from metrics import get_metrics, reset_metrics  # noqa: E402
 
 if not hasattr(can.bus.BusState, "BUS_OFF"):
@@ -91,7 +92,11 @@ def _run_main_with_key(monkeypatch, tmp_path, key_cfg):
             return None
 
     monkeypatch.setattr(can_monitor, "setup_interface", lambda *a, **k: None)
-    monkeypatch.setattr(can_monitor, "monitor", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(
+        can_monitor,
+        "monitor",
+        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
     monkeypatch.setattr(can.interface, "Bus", lambda *a, **k: DummyBus())
     monkeypatch.setattr(can_monitor, "UDSClient", DummyClient)
 
@@ -376,6 +381,78 @@ def test_apply_patches_sends_and_logs(caplog, bus_factory):
         with patch.object(bus, "recv", side_effect=fake_recv):
             apply_patches(bus, patches)
     assert "Patch 'demo' applied" in caplog.text
+
+
+def test_no_cf_sequence_warning_with_concurrent_access(log_setup):
+    logger, log_file = log_setup
+
+    class DummyBus:
+        def __init__(self) -> None:
+            self.recv_queue: "queue.Queue[can.Message | str]" = queue.Queue()
+            self.sent: "queue.Queue[can.Message]" = queue.Queue()
+
+        def send(self, msg, timeout=None):  # pragma: no cover - simple stub
+            self.sent.put(msg)
+
+        def recv(self, timeout=None):
+            try:
+                item = self.recv_queue.get(timeout=timeout)
+                if item == "error":
+                    raise can.CanError("stop")
+                return item
+            except queue.Empty:
+                return None
+
+    bus = DummyBus()
+    uds_cfg = {
+        "ecu_request_id": 0x123,
+        "ecu_response_id": 0x456,
+        "flow_control": {"block_size": 0, "st_min_ms": 0},
+    }
+    sequence = [
+        {
+            "can_id": 0x123,
+            "payload": "01",
+            "response_id": 0x456,
+            "timeout_ms": 200,
+        }
+    ]
+
+    def run_monitor() -> None:
+        try:
+            monitor(
+                bus,
+                None,
+                logger,
+                uds_config=uds_cfg,
+                sequence=sequence,
+                interval_ms=50,
+            )
+        except can.CanError:
+            pass
+
+    t = threading.Thread(target=run_monitor)
+    t.start()
+    bus.sent.get(timeout=1)
+
+    first = can.Message(
+        arbitration_id=0x456,
+        data=bytes([0x10, 0x0A, 1, 2, 3, 4, 5, 6]),
+        is_extended_id=False,
+    )
+    cf = can.Message(
+        arbitration_id=0x456,
+        data=bytes([0x21, 7, 8, 9, 10, 0, 0, 0]),
+        is_extended_id=False,
+    )
+
+    bus.recv_queue.put(first)
+    bus.recv_queue.put(cf)
+    bus.recv_queue.put("error")
+
+    t.join()
+    contents = log_file.read_text()
+    assert "Unexpected CF sequence" not in contents
 
 
 def test_load_dbc_missing_file(caplog):
@@ -765,7 +842,9 @@ def test_main_logs_reset_after_setup_failure(tmp_path, caplog):
         "can_monitor.setup_interface", side_effect=[RuntimeError("boom"), None]
     ), patch("can_monitor.monitor", side_effect=KeyboardInterrupt), patch(
         "can_monitor.can.interface.Bus"
-    ) as bus_cls, patch("time.sleep"):
+    ) as bus_cls, patch(
+        "time.sleep"
+    ):
         bus_cls.return_value.__enter__.return_value = object()
         ret = main(["--log", str(log_file)])
     assert ret == 0
