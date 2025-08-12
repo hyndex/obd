@@ -136,6 +136,9 @@ class UDSClient:
     error_on_reset: bool, optional
         When ``True``, an :class:`ISOTransportError` is raised instead of
         logging a warning when a reset occurs.
+    n_cr: float, optional
+        Maximum number of seconds to wait for the next response frame before
+        declaring a timeout.  This timer restarts after every received frame.
     logger: logging.Logger, optional
         Logger used for debug output.  Defaults to a module-level logger.
     """
@@ -158,6 +161,7 @@ class UDSClient:
         max_rx_size: "int | None" = None,
         on_reset: "Callable[[], None] | None" = None,
         error_on_reset: bool = False,
+        n_cr: float = 1.0,
         logger: logging.Logger = LOGGER,
         bus_lock: threading.Lock | None = None,
     ) -> None:
@@ -176,6 +180,7 @@ class UDSClient:
         self.max_rx_size = max_rx_size
         self.on_reset = on_reset
         self.error_on_reset = error_on_reset
+        self.n_cr = n_cr
         self.logger = logger
         self._rx_fc_status = 0
         self._lock = threading.Lock()
@@ -436,7 +441,9 @@ class UDSClient:
         self._rx_fc_status = 0
         self._send_fc(status=0)
 
-    def _receive(self, timeout: float = 1.0) -> bytes:
+    def _receive(self, timeout: float | None = None) -> bytes:
+        if timeout is None:
+            timeout = self.n_cr
         state: dict[str, any] = {
             "expected": 0,
             "payload": bytearray(),
@@ -448,8 +455,8 @@ class UDSClient:
         while True:
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
-                self.logger.error("UDS response timeout")
-                raise ISOTransportError("UDS response timeout")
+                self.logger.error("Consecutive frame timeout")
+                raise ISOTransportError("Consecutive frame timeout")
             msg = self._bus_recv(remaining)
             if not msg or msg.arbitration_id != self.resp_id:
                 continue
@@ -472,6 +479,7 @@ class UDSClient:
                 self.logger.warning(
                     "ISO-TP reception reset due to unexpected start-of-frame"
                 )
+                start = time.monotonic()
             if frame_type == 0x0:  # single
                 length = data[0] & 0x0F
                 payload = data[1 : 1 + length]  # noqa: E203
@@ -504,6 +512,7 @@ class UDSClient:
                     wait_count = 0
                 self._send_fc(status=self._rx_fc_status)
                 self.logger.debug("Received First Frame: total_len=%d", total_len)
+                start = time.monotonic()
                 continue
             if frame_type == 0x2 and state["expected"] > 0:
                 seq = data[0] & 0x0F
@@ -541,6 +550,7 @@ class UDSClient:
                         wait_count = 0
                     self._send_fc(status=self._rx_fc_status)
                     state["bs"] = 0
+                start = time.monotonic()
                 continue
             if state["expected"] > 0:
                 state["expected"] = 0
@@ -555,24 +565,28 @@ class UDSClient:
                 self.logger.warning(
                     "ISO-TP reception reset due to unexpected start-of-frame"
                 )
+                start = time.monotonic()
                 continue
 
     # ------------------------------------------------------------------
     def _request(
-        self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
+        self, service: int, data: bytes, timeout: float | tuple[float, float] | None = None
     ) -> bytes:
         if self.t_data and self.t_data.req:
             self.t_data.req(service, data)
         if isinstance(timeout, tuple):
             send_to, recv_to = timeout
         else:
-            send_to = recv_to = timeout
+            if timeout is None:
+                send_to = recv_to = self.n_cr
+            else:
+                send_to = recv_to = timeout
         self.logger.debug("Sending service 0x%02X with payload %s", service, data.hex())
         self._send(service, data, send_to)
         start = time.monotonic()
         while True:
             remaining = recv_to - (time.monotonic() - start)
-            rsp = self._receive(remaining)
+            rsp = self._receive(min(remaining, self.n_cr))
             self.logger.debug("Response for service 0x%02X: %s", service, rsp.hex())
             if len(rsp) >= 3 and rsp[0] == 0x7F and rsp[2] == 0x78:
                 # NRC 0x78: response pending, wait for final response
@@ -615,7 +629,7 @@ class UDSClient:
         finally:
             self._lock.release()
 
-    def receive(self, timeout: float = 1.0) -> bytes:
+    def receive(self, timeout: float | None = None) -> bytes:
         """Wait for a UDS response segmented over ISO-TP.
 
         Raises
@@ -626,6 +640,8 @@ class UDSClient:
         if not self._lock.acquire(blocking=False):
             raise RuntimeError("UDSClient operation already in progress")
         try:
+            if timeout is None:
+                timeout = self.n_cr
             self.logger.debug("Waiting for response with timeout %.3f", timeout)
             payload = self._receive(timeout)
             self.logger.info("Received payload: %s", payload.hex())
@@ -634,7 +650,7 @@ class UDSClient:
             self._lock.release()
 
     def request(
-        self, service: int, data: bytes, timeout: float | tuple[float, float] = 1.0
+        self, service: int, data: bytes, timeout: float | tuple[float, float] | None = None
     ) -> bytes:
         """Send a request and wait for the response atomically.
 

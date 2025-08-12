@@ -143,6 +143,8 @@ The low level ``UDSClient`` helper used by the monitor also exposes a
 configurable timeout.  The ``timeout`` argument of ``send`` and ``request`` may
 be either a single float or a ``(N_Bs, N_Cr)`` tuple to independently limit how
 long the client waits for Flow Control frames and for response data.
+The default per-frame response timeout ``N_Cr`` can be adjusted globally via
+the ``n_cr`` constructor argument.
 
 ### Debug Logging
 
@@ -166,6 +168,9 @@ the ``DEBUG`` level.
 
 - ``max_rx_size`` limits the number of bytes reassembled for a multi-frame
   response.  Responses exceeding this size raise an ``ISOTransportError``.
+- ``n_cr`` sets the default response frame timeout in seconds.  A new timer
+  starts after each received frame and exceeding it raises an
+  ``ISOTransportError``.
 - The ``timeout`` argument of :meth:`send`, :meth:`receive`, and
   :meth:`request` accepts either a single float or a ``(flow_control,
   response)`` tuple.  The first element (``N_Bs``) bounds how long the client
