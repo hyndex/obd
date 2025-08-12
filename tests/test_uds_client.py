@@ -509,7 +509,7 @@ def test_request_tuple_timeouts(monkeypatch, bus_factory):
     monkeypatch.setattr(time, "monotonic", fake_monotonic)
     monkeypatch.setattr(bus, "recv", fake_recv)
 
-    with pytest.raises(ISOTransportError, match="UDS response timeout"):
+    with pytest.raises(ISOTransportError, match="Consecutive frame timeout"):
         client.request(0x22, b"\x01", timeout=(1.0, 0.1))
 
 
@@ -766,3 +766,51 @@ def test_send_flow_control_overflow(monkeypatch, bus_factory, caplog):
             client.send(0x22, bytes(range(10)))
 
     assert any("Flow control overflow" in r.message for r in caplog.records)
+
+
+def test_receive_timeout_between_consecutive_frames(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8, n_cr=1.0)
+
+    # Ignore Flow Control frames sent by the client
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x15, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    cf1 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 6, 7, 8, 9, 10, 11, 12]),
+        is_extended_id=False,
+    )
+    cf2 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x22, 13, 14, 15, 16, 17, 18, 19]),
+        is_extended_id=False,
+    )
+    events = [(0.0, ff), (0.5, cf1), (0.5, cf2)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout: float):
+        if events:
+            delay, msg = events[0]
+            if delay > timeout:
+                now[0] += timeout
+                events[0] = (delay - timeout, msg)
+                return None
+            now[0] += delay
+            events.pop(0)
+            return msg
+        now[0] += timeout
+        return None
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    with pytest.raises(ISOTransportError, match="timeout"):
+        client.receive()
