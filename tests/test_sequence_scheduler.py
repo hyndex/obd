@@ -158,3 +158,28 @@ def test_sequence_loop_timeout_warns(monkeypatch, bus_factory, caplog):
     assert any(
         "No response to 'ping' request" in r.getMessage() for r in caplog.records
     )
+
+
+def test_sequence_loop_logs_on_long_payload(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
+    sent = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+    stop = threading.Event()
+    seq = [
+        {
+            "name": "toolong",
+            "can_id": 0x123,
+            "payload": "001122334455667788",
+        }
+    ]
+    logger = logging.getLogger("seq")
+    with caplog.at_level(logging.ERROR, logger=logger.name):
+        t = threading.Thread(
+            target=_sequence_loop, args=(bus, seq, 20, None, logger, stop)
+        )
+        t.start()
+        time.sleep(0.05)
+        stop.set()
+        t.join()
+    assert not sent
+    assert any("exceeds 8 bytes" in r.getMessage() for r in caplog.records)
