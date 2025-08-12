@@ -104,3 +104,57 @@ def test_sequence_skips_security_access_when_locked_out(monkeypatch, bus_factory
     stop.set()
     t.join()
     assert not sent
+
+
+def test_sequence_loop_exception_stops_thread(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
+
+    def fail_send(msg, timeout=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(bus, "send", fail_send)
+    stop = threading.Event()
+    seq = [{"can_id": 0x123, "payload": "00"}]
+    logger = logging.getLogger("seq")
+    with caplog.at_level(logging.ERROR, logger=logger.name):
+        t = threading.Thread(
+            target=_sequence_loop, args=(bus, seq, 20, None, logger, stop)
+        )
+        t.start()
+        t.join(timeout=1)
+    assert stop.is_set()
+    assert not t.is_alive()
+    assert any("Sequence loop error" in r.getMessage() for r in caplog.records)
+
+
+def test_sequence_loop_timeout_warns(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    def no_resp(timeout):
+        time.sleep(timeout)
+        return None
+
+    monkeypatch.setattr(bus, "recv", no_resp)
+    stop = threading.Event()
+    seq = [
+        {
+            "name": "ping",
+            "can_id": 0x123,
+            "payload": "00",
+            "response_id": 0x321,
+            "timeout_ms": 10,
+        }
+    ]
+    logger = logging.getLogger("seq")
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        t = threading.Thread(
+            target=_sequence_loop, args=(bus, seq, 100, None, logger, stop)
+        )
+        t.start()
+        time.sleep(0.05)
+        stop.set()
+        t.join()
+    assert any(
+        "No response to 'ping' request" in r.getMessage() for r in caplog.records
+    )
