@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 import can_monitor  # noqa: E402
-from can_monitor import _process_uds_payload  # noqa: E402
+from can_monitor import _process_uds_payload, _convert_to_pcode  # noqa: E402
 
 
 def test_process_uds_payload_parses_dtc(caplog):
@@ -52,6 +52,18 @@ def test_ignore_p0000(caplog):
     assert caplog.text == ""
 
 
+def test_empty_payload(caplog):
+    state = {}
+    logger = logging.getLogger("test")
+    with caplog.at_level(logging.INFO):
+        _process_uds_payload(b"", state, {}, logger)
+    assert caplog.text == ""
+
+
+def test_convert_to_pcode_insufficient_bytes():
+    assert _convert_to_pcode(b"\x12") is None
+
+
 def test_unknown_dtc_logged_once(caplog):
     payload = bytes.fromhex("59 02 FF 12 34 00 10")
     state = {}
@@ -59,6 +71,7 @@ def test_unknown_dtc_logged_once(caplog):
     with caplog.at_level(logging.INFO):
         _process_uds_payload(payload, state, {}, logger)
     assert "P1234" in caplog.text
+    assert caplog.records[0].levelname == "INFO"
 
     caplog.clear()
     # Clear DTCs to allow re-logging at debug on reappearance
@@ -69,7 +82,7 @@ def test_unknown_dtc_logged_once(caplog):
     caplog.clear()
     with caplog.at_level(logging.DEBUG):
         _process_uds_payload(payload, state, {}, logger)
-    assert "P1234" in caplog.text
+    assert any(r.levelname == "DEBUG" and "P1234" in r.message for r in caplog.records)
     assert "DTC set unchanged" not in caplog.text
 
 
