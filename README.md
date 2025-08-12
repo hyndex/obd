@@ -198,6 +198,9 @@ be adjusted to trade throughput for bus load or apply throttling.  On
 Raspberry Pi hardware, using an `st_min_ms` of roughly 5–10 ms helps avoid
 missing consecutive frames due to OS scheduling latency.
 
+By default the client restarts the flow-control timer after each WAIT or CTS
+frame and allows up to `0xFF` consecutive WAIT frames before aborting.
+
 ```python
 # Maximise throughput
 client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=0, rx_st_min=0)
@@ -207,6 +210,9 @@ client = UDSClient(bus, 0x7E0, 0x7E8, rx_block_size=1, rx_st_min=20)
 
 # Protect against oversized responses
 client = UDSClient(bus, 0x7E0, 0x7E8, max_rx_size=1024)
+
+# Allow unlimited Flow Control WAIT frames (default)
+client = UDSClient(bus, 0x7E0, 0x7E8)
 
 # Permit a single Flow Control WAIT before aborting
 client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)

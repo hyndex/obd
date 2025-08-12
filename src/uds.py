@@ -110,7 +110,8 @@ class UDSClient:
         control frames.
     wft_max: int, optional
         Maximum number of consecutive Flow Control WAIT frames permitted
-        before aborting.  Default ``0`` per ISO-15765-2.
+        before aborting.  Default ``0xFF`` to allow indefinite WAIT frames
+        while relying on the N_Bs timeout.
         key_algo: callable or ``module:attr`` string, optional
         Function applied to the received seed to generate the security
         access key. When ``None`` a default inversion-based algorithm is
@@ -148,7 +149,7 @@ class UDSClient:
         is_extended_id: bool = False,
         rx_block_size: int = 0,
         rx_st_min: int = 0,
-        wft_max: int = 0,
+        wft_max: int = 0xFF,
         key_algo: "Callable[[bytes], bytes] | str | None" = None,
         source_address: "int | None" = None,
         target_address: "int | None" = None,
@@ -268,16 +269,14 @@ class UDSClient:
 
             # wait for flow control
             self.logger.debug("Waiting for Flow Control frame")
-            elapsed = 0.0
             wait_count = 0
+            fc_start = time.monotonic()
             while True:
-                remaining = fc_timeout - elapsed
+                remaining = fc_timeout - (time.monotonic() - fc_start)
                 if remaining <= 0:
                     self.logger.error("No Flow Control frame received")
                     raise ISOTransportError("No Flow Control frame received")
-                wait_start = time.monotonic()
                 fc = self._bus_recv(remaining)
-                elapsed += time.monotonic() - wait_start
                 if not fc or fc.arbitration_id != self.resp_id:
                     continue
                 data_fc = bytes(fc.data)
@@ -301,12 +300,14 @@ class UDSClient:
                         st_delay,
                     )
                     wait_count = 0
+                    fc_start = time.monotonic()
                     break
                 wait_count += 1
                 self.logger.debug("Flow Control WAIT received (%d)", wait_count)
                 if wait_count > self.wft_max:
                     self.logger.error("Flow control WAIT limit exceeded")
                     raise ISOTransportError("Too many Flow Control WAIT frames")
+                fc_start = time.monotonic()
             seq = 1
             offset = first_len
             sent_in_block = 0
@@ -318,14 +319,13 @@ class UDSClient:
                         block_size,
                     )
                     # need next flow control
+                    fc_start = time.monotonic()
                     while True:
-                        remaining = fc_timeout - elapsed
+                        remaining = fc_timeout - (time.monotonic() - fc_start)
                         if remaining <= 0:
                             self.logger.error("Flow control timeout")
                             raise ISOTransportError("Flow control timeout")
-                        wait_start = time.monotonic()
                         fc = self._bus_recv(remaining)
-                        elapsed += time.monotonic() - wait_start
                         if not fc or fc.arbitration_id != self.resp_id:
                             continue
                         data_fc = bytes(fc.data)
@@ -350,12 +350,14 @@ class UDSClient:
                             )
                             wait_count = 0
                             sent_in_block = 0
+                            fc_start = time.monotonic()
                             break
                         wait_count += 1
                         self.logger.debug("Flow Control WAIT received (%d)", wait_count)
                         if wait_count > self.wft_max:
                             self.logger.error("Flow control WAIT limit exceeded")
                             raise ISOTransportError("Too many Flow Control WAIT frames")
+                        fc_start = time.monotonic()
                 chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
                     cf_data = (
