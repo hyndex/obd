@@ -359,6 +359,17 @@ def _handle_uds_frame(
             logger.warning(
                 "Unexpected CF sequence: got %d expected %d", seq, state.get("next_seq")
             )
+            if ecu_req_id is not None:
+                fc_data = bytes([0x32, 0, 0, 0, 0, 0, 0, 0])
+                if addr_ext is not None:
+                    fc_data = bytes([addr_ext, 0x32, 0, 0, 0, 0, 0, 0])
+                fc = can.Message(
+                    arbitration_id=ecu_req_id,
+                    data=fc_data,
+                    is_extended_id=bool(ecu_req_id and ecu_req_id > 0x7FF),
+                )
+                with bus_lock:
+                    bus.send(fc)
             state["payload"] = bytearray()
             state["expected"] = 0
             return True

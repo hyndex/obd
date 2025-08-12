@@ -22,6 +22,7 @@ from can_monitor import (  # noqa: E402
     monitor,
     apply_patches,
     main,
+    _handle_uds_frame,
 )
 from metrics import get_metrics, reset_metrics  # noqa: E402
 
@@ -302,6 +303,47 @@ def test_monitor_uds_only_logs_uds_frames(log_setup, bus_factory):
     contents = log_file.read_text()
     assert "UDS Negative Response" in contents
     assert "decoded=" not in contents
+
+
+def test_handle_uds_frame_sequence_mismatch_sends_overflow(bus_factory):
+    bus = bus_factory(bitrate=500000)
+    state = {}
+    logger = logging.getLogger("uds_mismatch")
+    sent: list[can.Message] = []
+
+    with patch.object(bus, "send", lambda msg, timeout=None: sent.append(msg)):
+        first_frame = can.Message(
+            arbitration_id=0x7E8,
+            data=bytes([0x10, 0x0A, 0, 0, 0, 0, 0, 0]),
+            is_extended_id=False,
+        )
+        _handle_uds_frame(
+            bus,
+            first_frame,
+            state,
+            ecu_req_id=0x7E0,
+            block_size=0,
+            st_min=0,
+            uds_config={},
+            logger=logger,
+        )
+        bad_cf = can.Message(
+            arbitration_id=0x7E8,
+            data=bytes([0x22, 0, 0, 0, 0, 0, 0, 0]),
+            is_extended_id=False,
+        )
+        _handle_uds_frame(
+            bus,
+            bad_cf,
+            state,
+            ecu_req_id=0x7E0,
+            block_size=0,
+            st_min=0,
+            uds_config={},
+            logger=logger,
+        )
+
+    assert any(m.arbitration_id == 0x7E0 and m.data[0] == 0x32 for m in sent)
 
 
 def test_monitor_continues_with_slow_transport(log_setup, bus_factory):
