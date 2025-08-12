@@ -51,7 +51,7 @@ def test_send_segments_respects_flow_control(monkeypatch, bus_factory):
     assert sleeps and pytest.approx(sleeps[0], rel=0.1) == 0.001
 
 
-def test_send_cumulative_fc_timeout(monkeypatch, bus_factory):
+def test_send_restarts_fc_timeout(monkeypatch, bus_factory):
     bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
@@ -85,8 +85,7 @@ def test_send_cumulative_fc_timeout(monkeypatch, bus_factory):
     monkeypatch.setattr(bus, "recv", fake_recv)
 
     data = bytes(range(14))
-    with pytest.raises(ISOTransportError, match="Flow control timeout"):
-        client.send(0x22, data, timeout=1.0)
+    assert client.send(0x22, data, timeout=1.0)
 
 
 def test_send_rejects_overly_large_payload(monkeypatch, bus_factory):
@@ -671,6 +670,55 @@ def test_send_wait_timeout(monkeypatch, bus_factory, caplog):
     assert any("Flow Control WAIT received" in r.message for r in caplog.records)
     assert any("No Flow Control frame received" in r.message for r in caplog.records)
 
+
+def test_send_multiple_waits_within_timeout(monkeypatch, bus_factory, caplog):
+    bus = bus_factory(bitrate=500000)
+    test_logger = logging.getLogger("uds_multiple_waits")
+    test_logger.setLevel(logging.DEBUG)
+    client = UDSClient(bus, 0x7E0, 0x7E8, logger=test_logger)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    fc_wait = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x31, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    fc_cts = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x30, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+
+    events = [(0.6, fc_wait), (0.6, fc_wait), (0.6, fc_cts)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout):
+        if events:
+            delay, msg = events[0]
+            if delay > timeout:
+                now[0] += timeout
+                events[0] = (delay - timeout, msg)
+                return None
+            now[0] += delay
+            events.pop(0)
+            return msg
+        now[0] += timeout
+        return None
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    with caplog.at_level(logging.DEBUG, logger="uds_multiple_waits"):
+        assert client.send(0x22, bytes(range(10)), timeout=1.0)
+
+    wait_logs = [r for r in caplog.records if "Flow Control WAIT received" in r.message]
+    assert len(wait_logs) == 2
+    assert len(sent) == 2
 
 def test_send_wait_overflow(monkeypatch, bus_factory):
     bus = bus_factory(bitrate=500000)
