@@ -101,6 +101,11 @@ diagnostic trouble code (DTC) metadata and ISO-TP flow control options.
   "uds": {
     "ecu_request_id": 2016,
     "ecu_response_id": 2024,
+    "security": {
+      "level": 1,
+      "key": "FFFF",
+      "algorithm": "xor"
+    },
     "dtcs": {
       "P20F9": {
         "description": "Power stack motor over-temperature (>100°C)",
@@ -113,6 +118,15 @@ diagnostic trouble code (DTC) metadata and ISO-TP flow control options.
   }
 }
 ```
+
+The security `key` may also be supplied as a list of byte values:
+
+```json
+"security": {"level": 1, "key": [255, 255]}
+```
+
+The `algorithm` field is optional and allows selecting an OEM-specific
+key derivation method.
 
 Multi-frame UDS responses are reassembled automatically.  When DTC
 information (service `0x19`) is received, entries found in `uds.dtcs`
