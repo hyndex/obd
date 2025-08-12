@@ -425,6 +425,13 @@ def _sequence_loop(
             start = time.time()
             for step in sequence:
                 data = bytes.fromhex(step["payload"])
+                if len(data) > 8:
+                    logger.error(
+                        "Payload length %d exceeds 8 bytes for CAN frame '%s'",
+                        len(data),
+                        step.get("name", hex(step["can_id"])),
+                    )
+                    continue
                 if uds_locked_out and data and data[0] == 0x27:
                     logger.warning("Skipping security access due to lockout")
                     continue
@@ -435,8 +442,16 @@ def _sequence_loop(
                         step.get("is_extended_id", step["can_id"] > 0x7FF)
                     ),
                 )
-                with bus_lock:
-                    bus.send(msg)
+                try:
+                    with bus_lock:
+                        bus.send(msg)
+                except can.CanError as exc:  # pragma: no cover - depends on driver
+                    logger.error(
+                        "Failed to send frame '%s': %s",
+                        step.get("name", hex(step["can_id"])),
+                        exc,
+                    )
+                    continue
                 resp_id = step.get("response_id")
                 if resp_id is not None:
                     timeout = step.get("timeout_ms", 100) / 1000
@@ -813,16 +828,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                                     )
                                 else:
                                     client.security_access(level, key)
-                                logger.info(
-                                    "UDS security level %s unlocked", level
-                                )
+                                logger.info("UDS security level %s unlocked", level)
                             except ISOTransportError as exc:
                                 logger.warning(
                                     "UDS security level %s denied: %s", level, exc
                                 )
-                                if any(
-                                    code in str(exc) for code in ("0x36", "0x37")
-                                ):
+                                if any(code in str(exc) for code in ("0x36", "0x37")):
                                     uds_locked_out = True
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)
