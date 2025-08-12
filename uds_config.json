@@ -9,7 +9,11 @@
     "target_address": 16,
     "address_extension": null,
     "flow_control": { "block_size": 1, "st_min_ms": 1 },
-    "security": { "level": 1, "key": "FFFF" },
+    "security": {
+      "level": 1,
+      "key": [255, 255],
+      "algorithm": "xor"
+    },
     "dtcs": {
       "P058D": {
         "description": "Dual Aux communication failure",

@@ -763,7 +763,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                             if isinstance(key_cfg, str):
                                 key = bytes.fromhex(key_cfg)
                             elif isinstance(key_cfg, list):
-                                key = bytes(int(b) & 0xFF for b in key_cfg)
+                                key = bytes(key_cfg)
                             try:
                                 client.security_access(level, key)
                                 logger.info("UDS security level %s unlocked", level)

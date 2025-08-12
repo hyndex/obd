@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
+import can_monitor
 from can_monitor import (
     load_dbc,
     load_opendbc_dbs,
@@ -50,6 +51,62 @@ def log_setup(tmp_path):
 
 
 dbc_path = os.path.join(os.path.dirname(__file__), "..", "src", "OBD.dbc")
+
+
+def _run_main_with_key(monkeypatch, tmp_path, key_cfg):
+    config = {
+        "uds": {
+            "ecu_request_id": 1,
+            "ecu_response_id": 2,
+            "security": {"level": 1, "key": key_cfg},
+        }
+    }
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps(config))
+
+    captured = {}
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def change_session(self, sess):
+            return True
+
+        def security_access(self, level, key):
+            captured["key"] = key
+            return True
+
+    class DummyBus:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def send(self, *args, **kwargs):
+            pass
+
+        def recv(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(can_monitor, "setup_interface", lambda *a, **k: None)
+    monkeypatch.setattr(can_monitor, "monitor", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(can.interface, "Bus", lambda *a, **k: DummyBus())
+    monkeypatch.setattr(can_monitor, "UDSClient", DummyClient)
+
+    assert main(["--config", str(cfg_path), "--interface", "vcan0"]) == 0
+    return captured["key"]
+
+
+def test_security_key_hex_string(monkeypatch, tmp_path):
+    key = _run_main_with_key(monkeypatch, tmp_path, "A1B2")
+    assert key == bytes.fromhex("A1B2")
+
+
+def test_security_key_byte_list(monkeypatch, tmp_path):
+    key = _run_main_with_key(monkeypatch, tmp_path, [1, 2, 3])
+    assert key == bytes([1, 2, 3])
 
 
 @pytest.mark.parametrize("bitrate", [125000, 500000])
