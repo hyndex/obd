@@ -4,6 +4,7 @@ import threading
 import queue
 import can
 import pytest
+import math
 
 import sys
 from pathlib import Path
@@ -814,3 +815,75 @@ def test_receive_timeout_between_consecutive_frames(monkeypatch, bus_factory):
 
     with pytest.raises(ISOTransportError, match="timeout"):
         client.receive()
+
+
+def test_can_fd_send_large_payload(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8, can_fd=True)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    fc = can.Message(
+        arbitration_id=0x7E8,
+        is_fd=True,
+        data=bytes([0x30, 0, 0] + [0] * 61),
+    )
+    fcs = [fc]
+
+    def fake_recv(timeout: float):
+        return fcs.pop(0) if fcs else None
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    data = bytes([i & 0xFF for i in range(5000)])
+    client.send(0x22, data)
+
+    assert sent and sent[0].is_fd
+    assert len(sent[0].data) == 64
+    assert sent[0].data[0] == 0x10 and sent[0].data[1] == 0x00
+    assert int.from_bytes(sent[0].data[2:6], "big") == len(data) + 1
+    assert all(len(m.data) == 64 for m in sent)
+    expected_frames = 1 + math.ceil((len(data) + 1 - (64 - 6)) / (64 - 1))
+    assert len(sent) == expected_frames
+
+
+def test_can_fd_receive_large_payload(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8, can_fd=True)
+
+    sent_fc: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent_fc.append(msg))
+
+    total_len = 5000
+    payload = bytes([i & 0xFF for i in range(total_len)])
+    dlc = 64
+    first_len = dlc - 6
+    frames = []
+    first = bytearray(dlc)
+    first[0:6] = [0x10, 0x00, (total_len >> 24) & 0xFF, (total_len >> 16) & 0xFF, (total_len >> 8) & 0xFF, total_len & 0xFF]
+    first[6:6 + first_len] = payload[:first_len]
+    frames.append(can.Message(arbitration_id=0x7E8, is_fd=True, data=bytes(first)))
+    offset = first_len
+    seq = 1
+    chunk_len = dlc - 1
+    while offset < total_len:
+        cf = bytearray(dlc)
+        cf[0] = 0x20 | (seq & 0x0F)
+        chunk = payload[offset : offset + chunk_len]
+        cf[1 : 1 + len(chunk)] = chunk
+        frames.append(can.Message(arbitration_id=0x7E8, is_fd=True, data=bytes(cf)))
+        offset += len(chunk)
+        seq = (seq + 1) & 0x0F
+
+    recvs = frames.copy()
+
+    def fake_recv(timeout: float):
+        return recvs.pop(0) if recvs else None
+
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    result = client.receive(timeout=1.0)
+    assert result == payload
+    assert sent_fc and sent_fc[0].is_fd
+    assert len(sent_fc[0].data) == 64
