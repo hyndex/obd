@@ -8,11 +8,11 @@
     "source_address": 241,
     "target_address": 16,
     "address_extension": null,
-    "flow_control": { "block_size": 1, "st_min_ms": 5 },
+    "flow_control": { "block_size": 1, "st_min_ms": 1 },
     "security": {
       "level": 1,
-      "key": [255, 255],
-      "algorithm": "xor"
+      "data_record": [1, 1],
+      "algorithm": "security_algorithms:xor_invert"
     },
     "dtcs": {
       "P058D": {
@@ -175,15 +175,39 @@
       "response_id": 2024
     },
     {
-      "name": "read_dtc",
+      "name": "request_seed",
       "can_id": 2016,
-      "payload": "03 19 02 FF 00 00 00 00",
+      "payload": "06 27 01 01 01 00 00 00",
       "response_id": 2024
     },
     {
-      "name": "flow_control",
+      "name": "send_key",
+      "can_id": 2016,
+      "payload": "06 27 02 01 FF FF 00 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "read_dtc1",
+      "can_id": 2016,
+      "payload": "03 19 01 01 00 00 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "read_dtc2",
+      "can_id": 2016,
+      "payload": "03 19 01 01 00 00 00 00",
+      "response_id": 2024
+    },
+    {
+      "name": "flow_control1",
       "can_id": 2024,
-      "payload": "30 01 05 00 00 00 00 00",
+      "payload": "30 01 01 00 00 00 00 00",
+      "response_id": null
+    },
+    {
+      "name": "flow_control2",
+      "can_id": 2024,
+      "payload": "30 01 01 00 00 00 00 00",
       "response_id": null
     }
   ],

@@ -802,14 +802,27 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 key = bytes.fromhex(key_cfg)
                             elif isinstance(key_cfg, list):
                                 key = bytes(key_cfg)
+                            dr_cfg = sec_cfg.get("data_record")
+                            data_record = (
+                                bytes(dr_cfg) if isinstance(dr_cfg, list) else b""
+                            )
                             try:
-                                client.security_access(level, key)
-                                logger.info("UDS security level %s unlocked", level)
+                                if data_record:
+                                    client.security_access(
+                                        level, key, data_record=data_record
+                                    )
+                                else:
+                                    client.security_access(level, key)
+                                logger.info(
+                                    "UDS security level %s unlocked", level
+                                )
                             except ISOTransportError as exc:
                                 logger.warning(
                                     "UDS security level %s denied: %s", level, exc
                                 )
-                                if any(code in str(exc) for code in ("0x36", "0x37")):
+                                if any(
+                                    code in str(exc) for code in ("0x36", "0x37")
+                                ):
                                     uds_locked_out = True
                     except Exception as exc:  # pragma: no cover - best effort
                         logger.warning("UDS initialisation failed: %s", exc)

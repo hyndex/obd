@@ -20,10 +20,13 @@ UDSClient -> CAN bus -> VCU -> CAN bus -> UDSClient
 The typical sequence is:
 
 1. **Enter extended diagnostic session** – unlocks enhanced services.
-2. **Obtain and submit security access key** – required before protected
-   services such as DTC reading.
-3. **Read DTCs** – retrieve current Diagnostic Trouble Codes.
-4. **Flow control** – govern multi‑frame responses.
+2. **Request seed** – `06 27 01 01 01 00 00 00` includes a two‑byte data record.
+3. **Send derived key** – `06 27 02 01 <key_hi> <key_lo> 00 00 00` echoes the data
+   record and the algorithmically computed key.
+4. **Read DTCs** – two identical requests
+   `03 19 01 01 00 00 00 00` query the VCU.
+5. **Flow control** – each multi‑frame response is acknowledged with
+   `30 01 01 00 00 00 00 00`.
 
 Each step and the associated configuration are detailed below.
 
@@ -37,11 +40,17 @@ with `50 03` if the transition is successful.
 
 ### Security Access
 After the session switch the client requests security level 1.  The first
-request (`06 27 01 01 01 00 00 00`) asks the VCU for a seed.  The client then
-computes the corresponding key and submits it in a follow‑up `0x27` request.  The
-algorithm used to derive the key is pluggable: by default the seed bytes are
-bit‑wise inverted, but a custom function or ``module:attr`` string can be
-supplied in configuration under ``uds.security.algorithm``.
+request (`06 27 01 01 01 00 00 00`) asks the VCU for a seed.  Two additional
+bytes (`01 01`) act as a supplier‑defined *data record* and must be echoed when
+submitting the key.  The client derives the key from the received seed (and, if
+necessary, the data record) before issuing a follow‑up `0x27` request.
+
+The key algorithm is pluggable: by default the seed bytes are bit‑wise inverted.
+Custom algorithms or ``module:attr`` strings may be supplied via
+``uds.security.algorithm``.  For ECUs where the correct algorithm is unknown a
+pre‑test helper iterates over a list of candidate algorithms until the VCU
+accepts one, complying with the ISO‑15765‑2 requirement to request a new seed
+after each failed attempt.
 
 If the VCU does not answer with a positive response (`0x67`) or the computed key
 is rejected, :meth:`security_access` raises :class:`ISOTransportError` with the
@@ -52,13 +61,13 @@ abort diagnostic polling.
 
 Large responses are segmented using ISO‑TP.  The receiver advertises its
 capabilities with a Flow Control (FC) frame.  For the VCU, a CTS frame
-`30 01 05 00 00 00 00 00` permits the sender to transmit one consecutive frame at
-a time (`block_size` = 1) with a minimum separation of 5 ms (`st_min_ms` = 5).
+`30 01 01 00 00 00 00 00` permits the sender to transmit one consecutive frame at
+a time (`block_size` = 1) with a minimum separation of 1 ms (`st_min_ms` = 1).
 On Raspberry Pi hardware, increasing `st_min_ms` to 5–10 ms helps prevent missed
 frames due to scheduling jitter. These defaults are configurable in the JSON file:
 
 ```json
-"flow_control": { "block_size": 1, "st_min_ms": 5 }
+"flow_control": { "block_size": 1, "st_min_ms": 1 }
 ```
 
 If the VCU responds with an FC status **WAIT** (0x1) transmission pauses but the
@@ -68,8 +77,8 @@ If the VCU responds with an FC status **WAIT** (0x1) transmission pauses but the
 ## Diagnostic Trouble Code Retrieval
 
 Once security is unlocked the monitor issues
-`03 19 02 FF 00 00 00 00` to read all stored DTCs.  The VCU responds with a
-multi‑frame message containing a count and one or more 3‑byte DTC entries.  Each
+`03 19 01 01 00 00 00 00` twice to query stored DTCs.  The VCU responds with
+multi‑frame messages containing a count and one or more 3‑byte DTC entries.  Each
 code is decoded, mapped to metadata defined in the configuration and logged.
 Critical codes (those with `"alert": true`) trigger an explicit alert in the
 output.
@@ -131,9 +140,12 @@ control parameters used by the monitor:
   "source_address": 241,
   "target_address": 16,
   "address_extension": null,
-  "session": 3,
-  "security": { "level": 1, "key": null },
-  "flow_control": { "block_size": 1, "st_min_ms": 5 },
+  "security": {
+    "level": 1,
+    "data_record": [1, 1],
+    "algorithm": "security_algorithms:xor_invert"
+  },
+    "flow_control": { "block_size": 1, "st_min_ms": 1 },
   "dtcs": { ... }
 }
 ```
@@ -143,8 +155,11 @@ control parameters used by the monitor:
   `target_address` activates 29‑bit normal‑fixed addressing automatically.
 * **Session** – the `session` field selects the diagnostic session (3 = extended).
   The code automatically invokes `change_session` before other actions.
-* **Security** – `security.level` sets the access level.  To supply a fixed key
-  instead of computing one, populate `security.key` with an 8‑byte hex string.
+* **Security** – `security.level` sets the access level.  `security.data_record`
+  appends supplier‑specific bytes to the seed request and is echoed when
+  submitting the key.  `security.algorithm` names a callable used to derive the
+  key from the ECU's seed.  A static key may be provided via `security.key`
+  if the algorithm is known to be unnecessary.
 * **Flow Control** – `block_size` and `st_min_ms` tune ISO‑TP reception.  Larger
   block sizes trade memory for throughput; a non‑zero `st_min_ms` throttles the
   sender.  Raspberry Pi systems typically require `st_min_ms` of 5–10 ms to

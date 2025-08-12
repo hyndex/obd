@@ -48,27 +48,46 @@ def _nrc_desc(code: int) -> str:
     return _NRC_DESC.get(code, "Unknown error")
 
 
-def default_key_algo(seed: bytes) -> bytes:
-    """Fallback key algorithm performing a bitwise inversion."""
+def default_key_algo(seed: bytes, data_record: bytes = b"") -> bytes:
+    """Fallback key algorithm performing a bitwise inversion.
+
+    The optional ``data_record`` argument is accepted for compatibility with
+    algorithms that incorporate additional request bytes into the key
+    computation.  It is ignored by this simple implementation which merely
+    inverts the provided seed.
+    """
 
     return bytes((b ^ 0xFF) & 0xFF for b in seed)
 
 
 def _load_key_algo(
-    spec: "Callable[[bytes], bytes] | str | None",
-) -> "Callable[[bytes], bytes]":
-    """Resolve a key algorithm from a callable or ``module:attr`` string."""
+    spec: "Callable[..., bytes] | str | None",
+) -> "Callable[[bytes, bytes], bytes]":
+    """Resolve a key algorithm from a callable or ``module:attr`` string.
+
+    The returned callable always accepts ``(seed, data_record)`` but wrapped
+    functions may ignore the second argument if they only operate on the seed.
+    """
+
+    def _wrap(func: Callable[..., bytes]) -> "Callable[[bytes, bytes], bytes]":
+        def wrapped(seed: bytes, data_record: bytes = b"") -> bytes:
+            try:
+                return func(seed, data_record)  # type: ignore[misc]
+            except TypeError:
+                return func(seed)  # type: ignore[misc]
+
+        return wrapped
 
     if spec is None:
         return default_key_algo
     if callable(spec):
-        return spec
+        return _wrap(spec)
     if isinstance(spec, str):
         module_name, _, attr = spec.partition(":")
         module = importlib.import_module(module_name)
         algo = getattr(module, attr) if attr else module
         if callable(algo):
-            return algo  # type: ignore[arg-type]
+            return _wrap(algo)  # type: ignore[arg-type]
         raise TypeError("Security key algorithm is not callable")
     raise TypeError("Invalid key algorithm specification")
 
@@ -762,14 +781,21 @@ class UDSClient:
         return False
 
     def security_access(
-        self, level: int, key: "bytes | None" = None, timeout: float = 1.0
+        self,
+        level: int,
+        key: "bytes | None" = None,
+        *,
+        data_record: bytes = b"",
+        key_algo: "Callable[..., bytes] | str | None" = None,
+        timeout: float = 1.0,
     ) -> bool:
         """Request security access at ``level``.
 
         If ``key`` is ``None`` the key is derived from the ECU-provided seed
-        using ``key_algo`` specified at construction or via configuration.
-        ``key_algo`` may be a callable or a ``module:attr`` string which is
-        imported dynamically.
+        using ``key_algo`` specified at construction or via configuration.  The
+        optional ``data_record`` bytes are appended to the seed request and, when
+        generating a key, passed to the key algorithm.  ``key_algo`` may be a
+        callable or a ``module:attr`` string which is imported dynamically.
 
         Raises
         ------
@@ -779,7 +805,7 @@ class UDSClient:
         """
 
         self.logger.info("Requesting security access level %d", level)
-        rsp = self.request(0x27, bytes([level * 2 - 1]), timeout)
+        rsp = self.request(0x27, bytes([level * 2 - 1]) + data_record, timeout)
         if len(rsp) < 2:
             self.logger.error("Invalid seed response")
             raise ISOTransportError("Invalid seed response")
@@ -795,10 +821,11 @@ class UDSClient:
             self.logger.error("Unexpected seed response: %s", rsp.hex())
             raise ISOTransportError("Unexpected seed response")
         seed = rsp[2:]
+        algo = _load_key_algo(key_algo) if key_algo is not None else self._key_algo
         if key is None:
-            key = self._key_algo(seed)
+            key = algo(seed, data_record)
         self.logger.info("Submitting key for security level %d", level)
-        rsp2 = self.request(0x27, bytes([level * 2]) + key, timeout)
+        rsp2 = self.request(0x27, bytes([level * 2]) + data_record + key, timeout)
         if len(rsp2) < 2:
             self.logger.error("Invalid key response")
             raise ISOTransportError("Invalid key response")
