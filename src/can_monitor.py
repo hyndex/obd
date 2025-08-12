@@ -58,8 +58,12 @@ def apply_patches(bus: "can.BusABC", patches: dict[str, Any]) -> None:
             is_extended_id=False,
         )
         for _ in range(p.get("retries", 1)):
-            bus.send(msg, timeout=0.2)
-            rsp = bus.recv(timeout=p.get("timeout_ms", 300) / 1000)
+            try:
+                bus.send(msg, timeout=0.2)
+                rsp = bus.recv(timeout=p.get("timeout_ms", 300) / 1000)
+            except can.CanError as exc:
+                logging.warning("Patch '%s' failed – CAN error: %s", name, exc)
+                break
             if rsp and rsp.arbitration_id == p["response_id"]:
                 logging.info("Patch '%s' applied (got 0x%02X)", name, rsp.data[0])
                 break
