@@ -144,10 +144,13 @@ def load_opendbc_dbs(bus: "can.BusABC") -> tuple[Optional[Database], list[Databa
     return None, fallback_dbs
 
 
-def _convert_to_pcode(code_bytes: bytes) -> str:
-    """Convert three raw DTC bytes to standard Pxxxx style code."""
+def _convert_to_pcode(code_bytes: bytes) -> Optional[str]:
+    """Convert raw DTC bytes to standard Pxxxx style code.
+
+    Returns ``None`` if fewer than two bytes are provided.
+    """
     if len(code_bytes) < 2:
-        return "P0000"
+        return None
     value = (code_bytes[0] << 8) | code_bytes[1]
     letter_map = {0: "P", 1: "C", 2: "B", 3: "U"}
     letter = letter_map.get((value >> 14) & 0x3, "P")
@@ -216,7 +219,7 @@ def _process_uds_payload(
         for i in range(dtc_count):
             start = i * 4
             code = _convert_to_pcode(entries[start : start + 3])  # noqa: E203
-            if code == "P0000":
+            if code is None or code == "P0000":
                 continue
             info = uds_config.get("dtcs", {}).get(code)
             if info:
