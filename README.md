@@ -210,6 +210,9 @@ client = UDSClient(bus, 0x7E0, 0x7E8, max_rx_size=1024)
 
 # Permit a single Flow Control WAIT before aborting
 client = UDSClient(bus, 0x7E0, 0x7E8, wft_max=1)
+
+# Use ISO-recommended padding byte
+client = UDSClient(bus, 0x7E0, 0x7E8, pad_byte=0xCC)
 ```
 
 Equivalent settings may be supplied in the JSON configuration:

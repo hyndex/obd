@@ -110,8 +110,12 @@ class UDSClient:
         control frames.
     wft_max: int, optional
         Maximum number of consecutive Flow Control WAIT frames permitted
-        before aborting.  Default ``0`` per ISO-15765-2.
-        key_algo: callable or ``module:attr`` string, optional
+        before aborting.  A value of ``0xFF`` (the default) allows unlimited
+        waits as long as the overall timeout is not exceeded.
+    pad_byte: int, optional
+        Padding byte used to fill unused bytes in CAN frames. Defaults to
+        ``0x00``.
+    key_algo: callable or ``module:attr`` string, optional
         Function applied to the received seed to generate the security
         access key. When ``None`` a default inversion-based algorithm is
         used.  If a string is supplied it is treated as ``module:attr`` and
@@ -148,7 +152,8 @@ class UDSClient:
         is_extended_id: bool = False,
         rx_block_size: int = 0,
         rx_st_min: int = 0,
-        wft_max: int = 0,
+        wft_max: int = 0xFF,
+        pad_byte: int = 0x00,
         key_algo: "Callable[[bytes], bytes] | str | None" = None,
         source_address: "int | None" = None,
         target_address: "int | None" = None,
@@ -167,6 +172,7 @@ class UDSClient:
         self.rx_block_size = rx_block_size
         self.rx_st_min = rx_st_min
         self.wft_max = wft_max
+        self.pad_byte = pad_byte & 0xFF
         self._key_algo = _load_key_algo(key_algo)
         self.source_address = source_address
         self.target_address = target_address
@@ -224,11 +230,13 @@ class UDSClient:
                     frame_data = (
                         bytes([self.address_extension, pci])
                         + payload
-                        + bytes(single_limit - len(payload))
+                        + bytes([self.pad_byte] * (single_limit - len(payload)))
                     )
                 else:
                     frame_data = (
-                        bytes([pci]) + payload + bytes(single_limit - len(payload))
+                        bytes([pci])
+                        + payload
+                        + bytes([self.pad_byte] * (single_limit - len(payload)))
                     )
                 frame = can.Message(
                     arbitration_id=self.req_id,
@@ -250,13 +258,13 @@ class UDSClient:
                 ff_data = (
                     bytes([self.address_extension, pci_high, pci_low])
                     + first_payload
-                    + bytes(8 - 3 - len(first_payload))
+                    + bytes([self.pad_byte] * (8 - 3 - len(first_payload)))
                 )
             else:
                 ff_data = (
                     bytes([pci_high, pci_low])
                     + first_payload
-                    + bytes(8 - 2 - len(first_payload))
+                    + bytes([self.pad_byte] * (8 - 2 - len(first_payload)))
                 )
             ff = can.Message(
                 arbitration_id=self.req_id,
@@ -268,16 +276,14 @@ class UDSClient:
 
             # wait for flow control
             self.logger.debug("Waiting for Flow Control frame")
-            elapsed = 0.0
             wait_count = 0
+            deadline = time.monotonic() + fc_timeout
             while True:
-                remaining = fc_timeout - elapsed
+                remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     self.logger.error("No Flow Control frame received")
                     raise ISOTransportError("No Flow Control frame received")
-                wait_start = time.monotonic()
                 fc = self._bus_recv(remaining)
-                elapsed += time.monotonic() - wait_start
                 if not fc or fc.arbitration_id != self.resp_id:
                     continue
                 data_fc = bytes(fc.data)
@@ -307,6 +313,7 @@ class UDSClient:
                 if wait_count > self.wft_max:
                     self.logger.error("Flow control WAIT limit exceeded")
                     raise ISOTransportError("Too many Flow Control WAIT frames")
+                deadline = time.monotonic() + fc_timeout
             seq = 1
             offset = first_len
             sent_in_block = 0
@@ -318,14 +325,13 @@ class UDSClient:
                         block_size,
                     )
                     # need next flow control
+                    deadline = time.monotonic() + fc_timeout
                     while True:
-                        remaining = fc_timeout - elapsed
+                        remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             self.logger.error("Flow control timeout")
                             raise ISOTransportError("Flow control timeout")
-                        wait_start = time.monotonic()
                         fc = self._bus_recv(remaining)
-                        elapsed += time.monotonic() - wait_start
                         if not fc or fc.arbitration_id != self.resp_id:
                             continue
                         data_fc = bytes(fc.data)
@@ -356,18 +362,19 @@ class UDSClient:
                         if wait_count > self.wft_max:
                             self.logger.error("Flow control WAIT limit exceeded")
                             raise ISOTransportError("Too many Flow Control WAIT frames")
+                        deadline = time.monotonic() + fc_timeout
                 chunk = payload[offset : offset + chunk_len]  # noqa: E203
                 if self.address_extension is not None:
                     cf_data = (
                         bytes([self.address_extension, 0x20 | (seq & 0x0F)])
                         + chunk
-                        + bytes(chunk_len - len(chunk))
+                        + bytes([self.pad_byte] * (chunk_len - len(chunk)))
                     )
                 else:
                     cf_data = (
                         bytes([0x20 | (seq & 0x0F)])
                         + chunk
-                        + bytes(chunk_len - len(chunk))
+                        + bytes([self.pad_byte] * (chunk_len - len(chunk)))
                     )
                 cf = can.Message(
                     arbitration_id=self.req_id,
@@ -402,15 +409,24 @@ class UDSClient:
                     pci,
                     self.rx_block_size & 0xFF,
                     self.rx_st_min & 0xFF,
-                    0,
-                    0,
-                    0,
-                    0,
+                    self.pad_byte,
+                    self.pad_byte,
+                    self.pad_byte,
+                    self.pad_byte,
                 ]
             )
         else:
             data = bytes(
-                [pci, self.rx_block_size & 0xFF, self.rx_st_min & 0xFF, 0, 0, 0, 0, 0]
+                [
+                    pci,
+                    self.rx_block_size & 0xFF,
+                    self.rx_st_min & 0xFF,
+                    self.pad_byte,
+                    self.pad_byte,
+                    self.pad_byte,
+                    self.pad_byte,
+                    self.pad_byte,
+                ]
             )
         fc = can.Message(
             arbitration_id=self.req_id,
@@ -442,9 +458,9 @@ class UDSClient:
             "bs": 0,
         }
         wait_count = 0
-        start = time.monotonic()
+        deadline = time.monotonic() + timeout
         while True:
-            remaining = timeout - (time.monotonic() - start)
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self.logger.error("UDS response timeout")
                 raise ISOTransportError("UDS response timeout")
@@ -502,6 +518,7 @@ class UDSClient:
                     wait_count = 0
                 self._send_fc(status=self._rx_fc_status)
                 self.logger.debug("Received First Frame: total_len=%d", total_len)
+                deadline = time.monotonic() + timeout
                 continue
             if frame_type == 0x2 and state["expected"] > 0:
                 seq = data[0] & 0x0F
@@ -539,6 +556,7 @@ class UDSClient:
                         wait_count = 0
                     self._send_fc(status=self._rx_fc_status)
                     state["bs"] = 0
+                deadline = time.monotonic() + timeout
                 continue
             if state["expected"] > 0:
                 state["expected"] = 0

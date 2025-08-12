@@ -51,7 +51,7 @@ def test_send_segments_respects_flow_control(monkeypatch, bus_factory):
     assert sleeps and pytest.approx(sleeps[0], rel=0.1) == 0.001
 
 
-def test_send_cumulative_fc_timeout(monkeypatch, bus_factory):
+def test_send_fc_timeout(monkeypatch, bus_factory):
     bus = bus_factory(bitrate=500000)
     client = UDSClient(bus, 0x7E0, 0x7E8)
 
@@ -62,7 +62,7 @@ def test_send_cumulative_fc_timeout(monkeypatch, bus_factory):
         data=bytes([0x30, 1, 0, 0, 0, 0, 0, 0]),
         is_extended_id=False,
     )
-    events = [(0.6, fc), (0.6, fc)]
+    events = [(1.1, fc)]
     now = [0.0]
 
     def fake_monotonic() -> float:
@@ -85,8 +85,50 @@ def test_send_cumulative_fc_timeout(monkeypatch, bus_factory):
     monkeypatch.setattr(bus, "recv", fake_recv)
 
     data = bytes(range(14))
-    with pytest.raises(ISOTransportError, match="Flow control timeout"):
+    with pytest.raises(ISOTransportError, match="No Flow Control frame received"):
         client.send(0x22, data, timeout=1.0)
+
+
+def test_send_wait_resets_timeout(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: None)
+
+    wait_fc = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x31, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    cts_fc = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x30, 0, 0, 0, 0, 0, 0, 0]),
+        is_extended_id=False,
+    )
+    events = [(0.6, wait_fc), (0.6, cts_fc)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout: float):
+        if not events:
+            now[0] += timeout
+            return None
+        delay, msg = events[0]
+        if delay > timeout:
+            now[0] += timeout
+            events[0] = (delay - timeout, msg)
+            return None
+        now[0] += delay
+        events.pop(0)
+        return msg
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    data = bytes(range(14))
+    client.send(0x22, data, timeout=1.0)
 
 
 def test_send_rejects_overly_large_payload(monkeypatch, bus_factory):
@@ -718,3 +760,62 @@ def test_send_flow_control_overflow(monkeypatch, bus_factory, caplog):
             client.send(0x22, bytes(range(10)))
 
     assert any("Flow control overflow" in r.message for r in caplog.records)
+
+
+def test_custom_pad_byte(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8, pad_byte=0xCC)
+
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+
+    client.send(0x22, b"\x01")
+
+    assert sent
+    assert sent[0].data == bytes([0x02, 0x22, 0x01, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC])
+
+
+def test_receive_inter_frame_timeout_reset(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    client = UDSClient(bus, 0x7E0, 0x7E8)
+
+    ff = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x10, 0x0A, 0, 1, 2, 3, 4, 5]),
+        is_extended_id=False,
+    )
+    cf1 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x21, 6, 7, 8, 9, 10, 11, 12]),
+        is_extended_id=False,
+    )
+    cf2 = can.Message(
+        arbitration_id=0x7E8,
+        data=bytes([0x22, 13, 14, 15, 16, 17, 18, 19]),
+        is_extended_id=False,
+    )
+
+    events = [(0.0, ff), (0.6, cf1), (0.6, cf2)]
+    now = [0.0]
+
+    def fake_monotonic() -> float:
+        return now[0]
+
+    def fake_recv(timeout: float):
+        if not events:
+            now[0] += timeout
+            return None
+        delay, msg = events[0]
+        if delay > timeout:
+            now[0] += timeout
+            events[0] = (delay - timeout, msg)
+            return None
+        now[0] += delay
+        events.pop(0)
+        return msg
+
+    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(bus, "recv", fake_recv)
+
+    payload = client.receive(timeout=1.0)
+    assert payload == bytes(range(10))
