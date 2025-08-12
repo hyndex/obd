@@ -4,6 +4,7 @@ import pytest
 
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -115,6 +116,49 @@ def test_alert_only_on_change(caplog):
     caplog.clear()
     with caplog.at_level(logging.ERROR):
         _process_uds_payload(payload, state, uds_config, logger)
+    assert caplog.text.count("ALERT") == 1
+
+
+def test_persistent_alert_ignores_other_dtc_changes(caplog):
+    critical_only = bytes.fromhex("59 02 FF 05 8D 00 10")
+    with_extra = bytes.fromhex("59 02 FF 05 8D 00 10 12 34 00 10")
+    clear = bytes.fromhex("59 02 FF")
+    state: dict[str, Any] = {}
+    uds_config = {
+        "dtcs": {
+            "P058D": {
+                "description": "Dual Aux communication failure",
+                "severity": "CRITICAL",
+                "alert": True,
+                "component": "AUX",
+            },
+            "P1234": {
+                "description": "Example DTC",
+                "severity": "MAJOR",
+                "component": "MISC",
+            },
+        }
+    }
+    logger = logging.getLogger("test")
+
+    with caplog.at_level(logging.ERROR):
+        _process_uds_payload(critical_only, state, uds_config, logger)
+    assert caplog.text.count("ALERT") == 1
+
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        _process_uds_payload(with_extra, state, uds_config, logger)
+    assert "ALERT" not in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        _process_uds_payload(critical_only, state, uds_config, logger)
+    assert "ALERT" not in caplog.text
+
+    _process_uds_payload(clear, state, uds_config, logger)
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        _process_uds_payload(critical_only, state, uds_config, logger)
     assert caplog.text.count("ALERT") == 1
 
 

@@ -165,6 +165,7 @@ def _process_uds_payload(
     logger: logging.Logger,
 ) -> None:
     """Parse a complete UDS payload containing DTC information."""
+    active_alerts = state.setdefault("active_alerts", set())
     if not payload:
         return
     # negative response handling
@@ -211,7 +212,6 @@ def _process_uds_payload(
         dtc_count = len(entries) // 4
 
         seen_unknown = state.setdefault("seen_unknown_dtcs", set())
-        active_alerts = state.setdefault("active_alerts", set())
         parsed: list[dict[str, Any]] = []
         current_codes: set[str] = set()
         current_alerts: set[str] = set()
