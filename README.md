@@ -195,6 +195,21 @@ Normal-fixed, mixed and extended addressing modes are supported:
   29-bit identifiers using the ISO-TP normal-fixed scheme.
 - ``address_extension`` prepends an additional address byte for extended or
   mixed addressing.
+- Setting ``functional=True`` derives the broadcast identifier
+  ``0x18DBxxxx`` and enables collecting responses from multiple ECUs.
+  ``receive`` and ``request`` return a list of payloads when functional mode
+  is active.
+
+```python
+# Broadcast a functional request and gather all replies
+client = UDSClient(bus, 0, 0, source_address=0xF1, target_address=0x33, functional=True)
+client.send(0x22, b"\xF1\x90")  # single-frame request
+for payload in client.receive():
+    print(payload.hex())
+```
+
+Functional requests must fit in a single CAN frame as no Flow Control is
+possible when broadcasting.
 
 #### Flow Control Tuning
 

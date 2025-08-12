@@ -124,6 +124,10 @@ class UDSClient:
         29-bit normal-fixed scheme.
     target_address: int, optional
         8-bit target address for normal-fixed addressing.
+    functional: bool, optional
+        When ``True`` the 29-bit identifiers are derived using the functional
+        broadcast base ``0x18DB`` and responses from multiple ECUs are
+        collected.
     address_extension: int, optional
         Additional address byte prepended to each frame when operating in
         extended or mixed addressing modes.
@@ -163,6 +167,7 @@ class UDSClient:
         key_algo: "Callable[[bytes], bytes] | str | None" = None,
         source_address: "int | None" = None,
         target_address: "int | None" = None,
+        functional: bool = False,
         address_extension: "int | None" = None,
         t_data: "TDataPrimitive | None" = None,
         max_rx_size: "int | None" = None,
@@ -184,6 +189,7 @@ class UDSClient:
         self._key_algo = _load_key_algo(key_algo)
         self.source_address = source_address
         self.target_address = target_address
+        self.functional = functional
         self.address_extension = address_extension
         self.t_data = t_data
         self.max_rx_size = max_rx_size
@@ -198,14 +204,22 @@ class UDSClient:
         self.pad_byte = pad_byte & 0xFF
 
         if self.source_address is not None and self.target_address is not None:
-            base = 0x18DA
-            self.req_id = (
-                (base << 16) | (self.target_address << 8) | self.source_address
-            )
-            self.resp_id = (
-                (base << 16) | (self.source_address << 8) | self.target_address
-            )
-            self.is_extended_id = True
+            if self.functional:
+                base = 0x18DB
+                self.req_id = (
+                    (base << 16) | (self.target_address << 8) | self.source_address
+                )
+                self.resp_id = 0
+                self.is_extended_id = True
+            else:
+                base = 0x18DA
+                self.req_id = (
+                    (base << 16) | (self.target_address << 8) | self.source_address
+                )
+                self.resp_id = (
+                    (base << 16) | (self.source_address << 8) | self.target_address
+                )
+                self.is_extended_id = True
 
     def _bus_send(self, msg: "can.Message", timeout: float | None = None) -> None:
         if self.bus_lock:
@@ -453,7 +467,7 @@ class UDSClient:
         self._rx_fc_status = 0
         self._send_fc(status=0)
 
-    def _receive(self, timeout: float | None = None) -> bytes:
+    def _receive(self, timeout: float | None = None, collect: bool = False) -> "bytes | list[bytes]":
         if timeout is None:
             timeout = self.n_cr
         state: dict[str, any] = {
@@ -462,15 +476,27 @@ class UDSClient:
             "next_seq": 0,
             "bs": 0,
         }
+        responses: list[bytes] = []
         wait_count = 0
         start = time.monotonic()
         while True:
             remaining = timeout - (time.monotonic() - start)
             if remaining <= 0:
+                if collect and responses:
+                    return responses
                 self.logger.error("Consecutive frame timeout")
                 raise ISOTransportError("Consecutive frame timeout")
             msg = self._bus_recv(remaining)
-            if not msg or msg.arbitration_id != self.resp_id:
+            if not msg:
+                continue
+            if self.functional:
+                if (
+                    self.source_address is None
+                    or (msg.arbitration_id >> 16) != 0x18DA
+                    or (msg.arbitration_id & 0xFF) != self.source_address
+                ):
+                    continue
+            elif msg.arbitration_id != self.resp_id:
                 continue
             data = bytes(msg.data)
             if self.address_extension is not None:
@@ -479,18 +505,22 @@ class UDSClient:
                 data = data[1:]
             frame_type = data[0] >> 4
             if state["expected"] > 0 and frame_type in (0x0, 0x1):
-                state["expected"] = 0
-                state["payload"] = bytearray()
-                if self.on_reset:
-                    self.on_reset()
-                if self.error_on_reset:
-                    self.logger.error("Unexpected start-of-frame during reception")
-                    raise ISOTransportError(
-                        "Unexpected start-of-frame during reception"
+                if collect:
+                    state["expected"] = 0
+                    state["payload"] = bytearray()
+                else:
+                    state["expected"] = 0
+                    state["payload"] = bytearray()
+                    if self.on_reset:
+                        self.on_reset()
+                    if self.error_on_reset:
+                        self.logger.error("Unexpected start-of-frame during reception")
+                        raise ISOTransportError(
+                            "Unexpected start-of-frame during reception"
+                        )
+                    self.logger.warning(
+                        "ISO-TP reception reset due to unexpected start-of-frame"
                     )
-                self.logger.warning(
-                    "ISO-TP reception reset due to unexpected start-of-frame"
-                )
                 start = time.monotonic()
             if frame_type == 0x0:  # single
                 if self.can_fd and (data[0] & 0x0F) == 0 and len(data) > 1:
@@ -502,6 +532,10 @@ class UDSClient:
                 self.logger.debug("Received Single Frame: len=%d", length)
                 if self.t_data and self.t_data.ind:
                     self.t_data.ind(payload)
+                if collect:
+                    responses.append(payload)
+                    start = time.monotonic()
+                    continue
                 return payload
             if frame_type == 0x1:  # first frame
                 if self.can_fd and (data[0] & 0x0F) == 0:
@@ -558,6 +592,10 @@ class UDSClient:
                     state["expected"] = 0
                     if self.t_data and self.t_data.ind:
                         self.t_data.ind(payload)
+                    if collect:
+                        responses.append(payload)
+                        start = time.monotonic()
+                        continue
                     return payload
                 if self.rx_block_size > 0 and state["bs"] >= self.rx_block_size:
                     if self._rx_fc_status == 1:
@@ -572,6 +610,11 @@ class UDSClient:
                 start = time.monotonic()
                 continue
             if state["expected"] > 0:
+                if collect:
+                    state["expected"] = 0
+                    state["payload"] = bytearray()
+                    start = time.monotonic()
+                    continue
                 state["expected"] = 0
                 state["payload"] = bytearray()
                 if self.on_reset:
@@ -590,7 +633,7 @@ class UDSClient:
     # ------------------------------------------------------------------
     def _request(
         self, service: int, data: bytes, timeout: float | tuple[float, float] | None = None
-    ) -> bytes:
+    ) -> "bytes | list[bytes]":
         if self.t_data and self.t_data.req:
             self.t_data.req(service, data)
         if isinstance(timeout, tuple):
@@ -603,6 +646,15 @@ class UDSClient:
         self.logger.debug("Sending service 0x%02X with payload %s", service, data.hex())
         self._send(service, data, send_to)
         start = time.monotonic()
+        if self.functional:
+            remaining = recv_to - (time.monotonic() - start)
+            rsp = self._receive(min(remaining, self.n_cr), collect=True)
+            self.logger.debug(
+                "Response for service 0x%02X: %s",
+                service,
+                [p.hex() for p in rsp],
+            )
+            return rsp
         while True:
             remaining = recv_to - (time.monotonic() - start)
             rsp = self._receive(min(remaining, self.n_cr))
@@ -648,7 +700,7 @@ class UDSClient:
         finally:
             self._lock.release()
 
-    def receive(self, timeout: float | None = None) -> bytes:
+    def receive(self, timeout: float | None = None) -> "bytes | list[bytes]":
         """Wait for a UDS response segmented over ISO-TP.
 
         Raises
@@ -662,15 +714,20 @@ class UDSClient:
             if timeout is None:
                 timeout = self.n_cr
             self.logger.debug("Waiting for response with timeout %.3f", timeout)
-            payload = self._receive(timeout)
-            self.logger.info("Received payload: %s", payload.hex())
+            payload = self._receive(timeout, collect=self.functional)
+            if self.functional:
+                self.logger.info(
+                    "Received payloads: %s", [p.hex() for p in payload]
+                )
+            else:
+                self.logger.info("Received payload: %s", payload.hex())
             return payload
         finally:
             self._lock.release()
 
     def request(
         self, service: int, data: bytes, timeout: float | tuple[float, float] | None = None
-    ) -> bytes:
+    ) -> "bytes | list[bytes]":
         """Send a request and wait for the response atomically.
 
         Raises
