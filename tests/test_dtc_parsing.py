@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-import can_monitor
-from can_monitor import _process_uds_payload
+import can_monitor  # noqa: E402
+from can_monitor import _process_uds_payload  # noqa: E402
 
 
 def test_process_uds_payload_parses_dtc(caplog):
@@ -31,14 +31,18 @@ def test_process_uds_payload_parses_dtc(caplog):
 
 
 @pytest.mark.parametrize("nrc", [0x36, 0x37])
-def test_process_uds_payload_sets_locked_out(nrc):
+def test_process_uds_payload_sets_locked_out(nrc, caplog):
     can_monitor.uds_locked_out = False
     state = {}
     payload = bytes([0x7F, 0x27, nrc])
     logger = logging.getLogger("test")
-    _process_uds_payload(payload, state, {}, logger)
+    with caplog.at_level(logging.WARNING):
+        _process_uds_payload(payload, state, {}, logger)
     assert state.get("uds_locked_out") is True
     assert can_monitor.uds_locked_out is True
+    assert "locked out" in caplog.text.lower()
+
+
 def test_ignore_p0000(caplog):
     payload = bytes.fromhex("59 02 FF 00 00 00 10")
     state = {}

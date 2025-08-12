@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from can_monitor import _sequence_loop  # noqa: E402
+import can_monitor  # noqa: E402
 
 
 def test_sequence_interval(monkeypatch, bus_factory):
@@ -85,3 +86,21 @@ def test_sequence_multiframe(monkeypatch, bus_factory):
     stop.set()
     t.join()
     assert any(m.data[0] == 0x30 for m in sent)
+
+
+def test_sequence_skips_security_access_when_locked_out(monkeypatch, bus_factory):
+    bus = bus_factory(bitrate=500000)
+    sent: list[can.Message] = []
+    monkeypatch.setattr(bus, "send", lambda msg, timeout=None: sent.append(msg))
+    can_monitor.uds_locked_out = True
+    stop = threading.Event()
+    seq = [{"can_id": 0x123, "payload": "2701"}]
+    t = threading.Thread(
+        target=_sequence_loop,
+        args=(bus, seq, 20, None, logging.getLogger("test"), stop),
+    )
+    t.start()
+    time.sleep(0.05)
+    stop.set()
+    t.join()
+    assert not sent

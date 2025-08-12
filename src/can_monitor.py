@@ -193,6 +193,7 @@ def _process_uds_payload(
             state["uds_locked_out"] = True
             global uds_locked_out
             uds_locked_out = True
+            logger.warning("UDS security access locked out; further attempts disabled")
         if nrc == 0x78:
             # signal to the caller that a final response is pending
             state["pending"] = True
@@ -401,9 +402,13 @@ def _sequence_loop(
     while not stop_event.is_set():
         start = time.time()
         for step in sequence:
+            data = bytes.fromhex(step["payload"])
+            if uds_locked_out and data and data[0] == 0x27:
+                logger.warning("Skipping security access due to lockout")
+                continue
             msg = can.Message(
                 arbitration_id=step["can_id"],
-                data=bytes.fromhex(step["payload"]),
+                data=data,
                 is_extended_id=bool(step.get("is_extended_id", step["can_id"] > 0x7FF)),
             )
             bus.send(msg)
