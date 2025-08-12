@@ -416,51 +416,64 @@ def _sequence_loop(
     block = uds_config.get("flow_control", {}).get("block_size", 0) if uds_config else 0
     st_min = uds_config.get("flow_control", {}).get("st_min_ms", 0) if uds_config else 0
     state = {"expected": 0, "payload": bytearray()}
-    while not stop_event.is_set():
-        start = time.time()
-        for step in sequence:
-            data = bytes.fromhex(step["payload"])
-            if uds_locked_out and data and data[0] == 0x27:
-                logger.warning("Skipping security access due to lockout")
-                continue
-            msg = can.Message(
-                arbitration_id=step["can_id"],
-                data=data,
-                is_extended_id=bool(step.get("is_extended_id", step["can_id"] > 0x7FF)),
-            )
-            with bus_lock:
-                bus.send(msg)
-            resp_id = step.get("response_id")
-            if resp_id is not None:
-                timeout = step.get("timeout_ms", 100) / 1000
-                end_time = time.time() + timeout
-                state["expected"] = 0
-                state["payload"] = bytearray()
-                while time.time() < end_time and not stop_event.is_set():
-                    remaining = end_time - time.time()
-                    with bus_lock:
-                        rsp = bus.recv(timeout=remaining)
-                    if not rsp or rsp.arbitration_id != resp_id:
-                        continue
-                    if (
-                        _handle_uds_frame(
-                            bus,
-                            rsp,
-                            state,
-                            step["can_id"],
-                            block,
-                            st_min,
-                            uds_config or {},
-                            logger,
+    try:
+        while not stop_event.is_set():
+            start = time.time()
+            for step in sequence:
+                data = bytes.fromhex(step["payload"])
+                if uds_locked_out and data and data[0] == 0x27:
+                    logger.warning("Skipping security access due to lockout")
+                    continue
+                msg = can.Message(
+                    arbitration_id=step["can_id"],
+                    data=data,
+                    is_extended_id=bool(
+                        step.get("is_extended_id", step["can_id"] > 0x7FF)
+                    ),
+                )
+                with bus_lock:
+                    bus.send(msg)
+                resp_id = step.get("response_id")
+                if resp_id is not None:
+                    timeout = step.get("timeout_ms", 100) / 1000
+                    end_time = time.time() + timeout
+                    state["expected"] = 0
+                    state["payload"] = bytearray()
+                    received = False
+                    while time.time() < end_time and not stop_event.is_set():
+                        remaining = end_time - time.time()
+                        with bus_lock:
+                            rsp = bus.recv(timeout=remaining)
+                        if not rsp or rsp.arbitration_id != resp_id:
+                            continue
+                        if (
+                            _handle_uds_frame(
+                                bus,
+                                rsp,
+                                state,
+                                step["can_id"],
+                                block,
+                                st_min,
+                                uds_config or {},
+                                logger,
+                            )
+                            and state.get("expected", 0) <= 0
+                            and not state.pop("pending", False)
+                        ):
+                            received = True
+                            break
+                    if not received:
+                        logger.warning(
+                            "No response to '%s' request",
+                            step.get("name", hex(step["can_id"])),
                         )
-                        and state.get("expected", 0) <= 0
-                        and not state.pop("pending", False)
-                    ):
-                        break
-        elapsed = (time.time() - start) * 1000
-        wait_ms = interval_ms - elapsed
-        if wait_ms > 0:
-            stop_event.wait(wait_ms / 1000)
+            elapsed = (time.time() - start) * 1000
+            wait_ms = interval_ms - elapsed
+            if wait_ms > 0:
+                stop_event.wait(wait_ms / 1000)
+    except Exception:
+        logger.error("Sequence loop error", exc_info=True)
+        stop_event.set()
 
 
 def monitor(
